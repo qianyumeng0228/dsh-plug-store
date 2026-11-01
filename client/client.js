@@ -1,18 +1,192 @@
 window.__ModuleLoader__.load({ id: "dsh-store-market", factory: (require) => {
-var __dshStoreClient=(()=>{var z=Object.create;var y=Object.defineProperty;var G=Object.getOwnPropertyDescriptor;var K=Object.getOwnPropertyNames;var W=Object.getPrototypeOf,B=Object.prototype.hasOwnProperty;var A=(t,e)=>()=>{try{return e||t((e={exports:{}}).exports,e),e.exports}catch(n){throw e=0,n}},Q=(t,e)=>{for(var n in e)y(t,n,{get:e[n],enumerable:!0})},w=(t,e,n,r)=>{if(e&&typeof e=="object"||typeof e=="function")for(let u of K(e))!B.call(t,u)&&u!==n&&y(t,u,{get:()=>e[u],enumerable:!(r=G(e,u))||r.enumerable});return t};var X=(t,e,n)=>(n=t!=null?z(W(t)):{},w(e||!t||!t.__esModule?y(n,"default",{value:t,enumerable:!0}):n,t)),Z=t=>w(y({},"__esModule",{value:!0}),t);var L=A(o=>{"use strict";var d=Symbol.for("react.transitional.element"),J=Symbol.for("react.portal"),V=Symbol.for("react.fragment"),F=Symbol.for("react.strict_mode"),tt=Symbol.for("react.profiler"),et=Symbol.for("react.consumer"),nt=Symbol.for("react.context"),rt=Symbol.for("react.forward_ref"),ot=Symbol.for("react.suspense"),ut=Symbol.for("react.memo"),N=Symbol.for("react.lazy"),st=Symbol.for("react.activity"),it=Symbol.for("react.view_transition"),j=Symbol.iterator;function ft(t){return t===null||typeof t!="object"?null:(t=j&&t[j]||t["@@iterator"],typeof t=="function"?t:null)}var $={isMounted:function(){return!1},enqueueForceUpdate:function(){},enqueueReplaceState:function(){},enqueueSetState:function(){}},k=Object.assign,I={};function _(t,e,n){this.props=t,this.context=e,this.refs=I,this.updater=n||$}_.prototype.isReactComponent={};_.prototype.setState=function(t,e){if(typeof t!="object"&&typeof t!="function"&&t!=null)throw Error("takes an object of state variables to update or a function which returns an object of state variables.");this.updater.enqueueSetState(this,t,e,"setState")};_.prototype.forceUpdate=function(t){this.updater.enqueueForceUpdate(this,t,"forceUpdate")};function Y(){}Y.prototype=_.prototype;function R(t,e,n){this.props=t,this.context=e,this.refs=I,this.updater=n||$}var C=R.prototype=new Y;C.constructor=R;k(C,_.prototype);C.isPureReactComponent=!0;var H=Array.isArray;function T(){}var i={H:null,A:null,T:null,S:null},M=Object.prototype.hasOwnProperty;function g(t,e,n){var r=n.ref;return{$$typeof:d,type:t,key:e,ref:r!==void 0?r:null,props:n}}function ct(t,e){return g(t.type,e,t.props)}function S(t){return typeof t=="object"&&t!==null&&t.$$typeof===d}function lt(t){var e={"=":"=0",":":"=2"};return"$"+t.replace(/[=:]/g,function(n){return e[n]})}var P=/\/+/g;function m(t,e){return typeof t=="object"&&t!==null&&t.key!=null?lt(""+t.key):e.toString(36)}function at(t){switch(t.status){case"fulfilled":return t.value;case"rejected":throw t.reason;default:switch(typeof t.status=="string"?t.then(T,T):(t.status="pending",t.then(function(e){t.status==="pending"&&(t.status="fulfilled",t.value=e)},function(e){t.status==="pending"&&(t.status="rejected",t.reason=e)})),t.status){case"fulfilled":return t.value;case"rejected":throw t.reason}}throw t}function p(t,e,n,r,u){var s=typeof t;(s==="undefined"||s==="boolean")&&(t=null);var f=!1;if(t===null)f=!0;else switch(s){case"bigint":case"string":case"number":f=!0;break;case"object":switch(t.$$typeof){case d:case J:f=!0;break;case N:return f=t._init,p(f(t._payload),e,n,r,u)}}if(f)return u=u(t),f=r===""?"."+m(t,0):r,H(u)?(n="",f!=null&&(n=f.replace(P,"$&/")+"/"),p(u,e,n,"",function(q){return q})):u!=null&&(S(u)&&(u=ct(u,n+(u.key==null||t&&t.key===u.key?"":(""+u.key).replace(P,"$&/")+"/")+f)),e.push(u)),1;f=0;var l=r===""?".":r+":";if(H(t))for(var c=0;c<t.length;c++)r=t[c],s=l+m(r,c),f+=p(r,e,n,s,u);else if(c=ft(t),typeof c=="function")for(t=c.call(t),c=0;!(r=t.next()).done;)r=r.value,s=l+m(r,c++),f+=p(r,e,n,s,u);else if(s==="object"){if(typeof t.then=="function")return p(at(t),e,n,r,u);throw e=String(t),Error("Objects are not valid as a React child (found: "+(e==="[object Object]"?"object with keys {"+Object.keys(t).join(", ")+"}":e)+"). If you meant to render a collection of children, use an array instead.")}return f}function v(t,e,n){if(t==null)return t;var r=[],u=0;return p(t,r,"","",function(s){return e.call(n,s,u++)}),r}function pt(t){if(t._status===-1){var e=t._result,n=e();n.then(function(r){(t._status===0||t._status===-1)&&(t._status=1,t._result=r,n.status===void 0&&(n.status="fulfilled",n.value=r))},function(r){(t._status===0||t._status===-1)&&(t._status=2,t._result=r,n.status===void 0&&(n.status="rejected",n.reason=r))}),t._status===-1&&(t._status=0,t._result=n)}if(t._status===1)return t._result.default;throw t._result}var O=typeof reportError=="function"?reportError:function(t){if(typeof window=="object"&&typeof window.ErrorEvent=="function"){var e=new window.ErrorEvent("error",{bubbles:!0,cancelable:!0,message:typeof t=="object"&&t!==null&&typeof t.message=="string"?String(t.message):String(t),error:t});if(!window.dispatchEvent(e))return}else if(typeof process=="object"&&typeof process.emit=="function"){process.emit("uncaughtException",t);return}console.error(t)};function b(t){var e=i.T,n={};n.types=e!==null?e.types:null,i.T=n;try{var r=t(),u=i.S;u!==null&&u(n,r),typeof r=="object"&&r!==null&&typeof r.then=="function"&&r.then(T,O)}catch(s){O(s)}finally{e!==null&&n.types!==null&&(e.types=n.types),i.T=e}}function D(t){var e=i.T;if(e!==null){var n=e.types;n===null?e.types=[t]:n.indexOf(t)===-1&&n.push(t)}else b(D.bind(null,t))}var _t={map:v,forEach:function(t,e,n){v(t,function(){e.apply(this,arguments)},n)},count:function(t){var e=0;return v(t,function(){e++}),e},toArray:function(t){return v(t,function(e){return e})||[]},only:function(t){if(!S(t))throw Error("React.Children.only expected to receive a single React element child.");return t}};o.Activity=st;o.Children=_t;o.Component=_;o.Fragment=V;o.Profiler=tt;o.PureComponent=R;o.StrictMode=F;o.Suspense=ot;o.ViewTransition=it;o.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE=i;o.__COMPILER_RUNTIME={__proto__:null,c:function(t){return i.H.useMemoCache(t)}};o.addTransitionType=D;o.cache=function(t){return function(){return t.apply(null,arguments)}};o.cacheSignal=function(){return null};o.cloneElement=function(t,e,n){if(t==null)throw Error("The argument must be a React element, but you passed "+t+".");var r=k({},t.props),u=t.key;if(e!=null)for(s in e.key!==void 0&&(u=""+e.key),e)!M.call(e,s)||s==="key"||s==="__self"||s==="__source"||s==="ref"&&e.ref===void 0||(r[s]=e[s]);var s=arguments.length-2;if(s===1)r.children=n;else if(1<s){for(var f=Array(s),l=0;l<s;l++)f[l]=arguments[l+2];r.children=f}return g(t.type,u,r)};o.createContext=function(t){return t={$$typeof:nt,_currentValue:t,_currentValue2:t,_threadCount:0,Provider:null,Consumer:null},t.Provider=t,t.Consumer={$$typeof:et,_context:t},t};o.createElement=function(t,e,n){var r,u={},s=null;if(e!=null)for(r in e.key!==void 0&&(s=""+e.key),e)M.call(e,r)&&r!=="key"&&r!=="__self"&&r!=="__source"&&(u[r]=e[r]);var f=arguments.length-2;if(f===1)u.children=n;else if(1<f){for(var l=Array(f),c=0;c<f;c++)l[c]=arguments[c+2];u.children=l}if(t&&t.defaultProps)for(r in f=t.defaultProps,f)u[r]===void 0&&(u[r]=f[r]);return g(t,s,u)};o.createRef=function(){return{current:null}};o.forwardRef=function(t){return{$$typeof:rt,render:t}};o.isValidElement=S;o.lazy=function(t){return{$$typeof:N,_payload:{_status:-1,_result:t},_init:pt}};o.memo=function(t,e){return{$$typeof:ut,type:t,compare:e===void 0?null:e}};o.startTransition=b;o.unstable_useCacheRefresh=function(){return i.H.useCacheRefresh()};o.use=function(t){return i.H.use(t)};o.useActionState=function(t,e,n){return i.H.useActionState(t,e,n)};o.useCallback=function(t,e){return i.H.useCallback(t,e)};o.useContext=function(t){return i.H.useContext(t)};o.useDebugValue=function(){};o.useDeferredValue=function(t,e){return i.H.useDeferredValue(t,e)};o.useEffect=function(t,e){return i.H.useEffect(t,e)};o.useEffectEvent=function(t){return i.H.useEffectEvent(t)};o.useId=function(){return i.H.useId()};o.useImperativeHandle=function(t,e,n){return i.H.useImperativeHandle(t,e,n)};o.useInsertionEffect=function(t,e){return i.H.useInsertionEffect(t,e)};o.useLayoutEffect=function(t,e){return i.H.useLayoutEffect(t,e)};o.useMemo=function(t,e){return i.H.useMemo(t,e)};o.useOptimistic=function(t,e){return i.H.useOptimistic(t,e)};o.useReducer=function(t,e,n){return i.H.useReducer(t,e,n)};o.useRef=function(t){return i.H.useRef(t)};o.useState=function(t){return i.H.useState(t)};o.useSyncExternalStore=function(t,e,n){return i.H.useSyncExternalStore(t,e,n)};o.useTransition=function(){return i.H.useTransition()};o.version="19.3.1"});var x=A((Rt,U)=>{"use strict";U.exports=L()});var mt={};Q(mt,{apply:()=>vt,inject:()=>yt,name:()=>Et});var E=X(x(),1),Et="dsh-store-market",yt=["slots","locale"],a="dsh-store-market";function h(){return E.default.createElement("iframe",{src:"/dsh-store/",title:"DSH \u63D2\u4EF6\u5546\u5E97",style:{width:"100%",height:"100%",minHeight:"72vh",border:"0",background:"#ffffff",display:"block"}})}function vt(t){try{t.effect(()=>t.locale.register(a,{zh:{nav:"\u63D2\u4EF6\u5546\u5E97",desc:"DSH \u63D2\u4EF6\u5546\u5E97 \u2014 \u6D4F\u89C8\u5E76\u5B89\u88C5\u793E\u533A\u63D2\u4EF6"},en:{nav:"Plugin Store",desc:"DSH Plugin Store \u2014 browse and install community plugins"}}),"dsh-store-market: dictionaries");let e=t.locale.bind(a),n=(r,u)=>t.slots.register({name:r,id:a,order:u,label:()=>e("nav"),locale:a,inject:()=>({t:e})},()=>E.default.createElement(h));t.slots.register({name:"settings.section",id:a,order:41,label:()=>e("nav"),locale:a,inject:()=>({t:e})},()=>E.default.createElement(h));try{t.slots.register({name:"plugins.tab",id:a,order:-1,label:()=>e("nav"),locale:a,inject:()=>({t:e})},()=>E.default.createElement(h))}catch(r){console.warn("[dsh-store-market] plugins.tab slot unavailable on this host",r)}}catch(e){console.error("[dsh-store-market] client mount failed; store missing this session",e)}}return Z(mt);})();
-/*! Bundled license information:
+var __dshStoreClient = (() => {
+  var __create = Object.create;
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getProtoOf = Object.getPrototypeOf;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+    get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+  }) : x)(function(x) {
+    if (typeof require !== "undefined") return require.apply(this, arguments);
+    throw Error('Dynamic require of "' + x + '" is not supported');
+  });
+  var __export = (target, all) => {
+    for (var name2 in all)
+      __defProp(target, name2, { get: all[name2], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+    // If the importer is in node compatibility mode or this is not an ESM
+    // file that has been converted to a CommonJS file using a Babel-
+    // compatible transform (i.e. "__esModule" has not been set), then set
+    // "default" to the CommonJS "module.exports" for node compatibility.
+    isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+    mod
+  ));
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-react/cjs/react.production.js:
-  (**
-   * @license React
-   * react.production.js
-   *
-   * Copyright (c) Meta Platforms, Inc. and affiliates.
-   *
-   * This source code is licensed under the MIT license found in the
-   * LICENSE file in the root directory of this source tree.
-   *)
-*/
+  // dsh-store-market/client-src/index.js
+  var client_src_exports = {};
+  __export(client_src_exports, {
+    apply: () => apply,
+    inject: () => inject,
+    name: () => name
+  });
+  var import_react = __toESM(__require("react"), 1);
+  var name = "dsh-store-market";
+  var inject = ["slots", "locale"];
+  var NS = "dsh-store-market";
+  var SIDEBAR_PANEL_ID = "dsh-store-market";
+  function StoreFrame() {
+    return import_react.default.createElement("iframe", {
+      src: "/dsh-store/",
+      title: "DSH \u63D2\u4EF6\u5546\u5E97",
+      style: {
+        width: "100%",
+        height: "100%",
+        minHeight: "72vh",
+        border: "0",
+        background: "#ffffff",
+        display: "block"
+      }
+    });
+  }
+  function StoreLogo() {
+    return import_react.default.createElement(
+      "svg",
+      {
+        width: 16,
+        height: 16,
+        viewBox: "0 0 16 16",
+        "aria-hidden": "true",
+        style: { display: "block" }
+      },
+      import_react.default.createElement("rect", {
+        x: 1.5,
+        y: 1.5,
+        width: 13,
+        height: 13,
+        rx: 3,
+        fill: "currentColor",
+        opacity: 0.9
+      }),
+      import_react.default.createElement("path", {
+        d: "M5 7.5h6M5 10h4",
+        stroke: "#fff",
+        strokeWidth: 1.4,
+        strokeLinecap: "round",
+        fill: "none"
+      })
+    );
+  }
+  function createSectionGate(register, initiallyVisible = true) {
+    let ready = false;
+    let wanted = initiallyVisible;
+    let removed = false;
+    let dispose = null;
+    const apply2 = () => {
+      if (!ready) return;
+      const shouldShow = wanted && !removed;
+      if (shouldShow && dispose === null) {
+        try {
+          dispose = register();
+        } catch (error) {
+          console.warn("[dsh-store-market] slot register failed", error);
+        }
+        return;
+      }
+      if (!shouldShow && dispose !== null) {
+        const stop = dispose;
+        dispose = null;
+        stop();
+      }
+    };
+    return {
+      available: () => {
+        ready = true;
+        apply2();
+      },
+      setVisible: (visible) => {
+        wanted = visible;
+        apply2();
+      },
+      visible: () => dispose !== null,
+      retire: () => {
+        removed = true;
+        apply2();
+      }
+    };
+  }
+  function apply(ctx) {
+    try {
+      ctx.effect(() => ctx.locale.register(NS, {
+        zh: { nav: "\u63D2\u4EF6\u5546\u5E97", desc: "DSH \u63D2\u4EF6\u5546\u5E97 \u2014 \u6D4F\u89C8\u5E76\u5B89\u88C5\u793E\u533A\u63D2\u4EF6" },
+        en: { nav: "Plugin Store", desc: "DSH Plugin Store \u2014 browse and install community plugins" }
+      }), "dsh-store-market: dictionaries");
+      const t = ctx.locale.bind(NS);
+      const frame = () => import_react.default.createElement(StoreFrame);
+      const sectionGate = createSectionGate(() => {
+        const off = ctx.slots.register({
+          name: "settings.section",
+          id: NS,
+          order: 41,
+          label: () => t("nav"),
+          locale: NS,
+          inject: () => ({ t })
+        }, frame);
+        return typeof off === "function" ? off : () => {
+        };
+      });
+      ctx.slots.inject("settings.section", () => sectionGate.available());
+      const tabGate = createSectionGate(() => {
+        const off = ctx.slots.register({
+          name: "settings.plugins.tab",
+          id: NS,
+          order: 60,
+          label: () => t("nav"),
+          locale: NS,
+          inject: () => ({ t })
+        }, frame);
+        return typeof off === "function" ? off : () => {
+        };
+      });
+      ctx.slots.inject("settings.plugins.tab", () => tabGate.available());
+      const sidebarGate = createSectionGate(() => {
+        const offPanel = ctx.slots.register({
+          name: "main",
+          key: SIDEBAR_PANEL_ID,
+          locale: NS,
+          inject: () => ({ t })
+        }, () => import_react.default.createElement("div", { style: { width: "100%", height: "100%", background: "#ffffff" } }, frame()));
+        const offRow = ctx.slots.register({
+          name: "sidebar.panellist",
+          id: SIDEBAR_PANEL_ID,
+          order: 1,
+          label: () => t("nav"),
+          locale: NS
+        }, (owner = {}) => import_react.default.createElement(StoreLogo));
+        return () => {
+          if (typeof offRow === "function") offRow();
+          if (typeof offPanel === "function") offPanel();
+        };
+      }, false);
+      ctx.slots.inject("sidebar.panellist", () => sidebarGate.available());
+      setTimeout(() => sidebarGate.available(), 1500);
+    } catch (error) {
+      console.error("[dsh-store-market] client mount failed; store missing this session", error);
+    }
+  }
+  return __toCommonJS(client_src_exports);
+})();
 
 return __dshStoreClient;
 } });
