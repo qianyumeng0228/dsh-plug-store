@@ -47,18 +47,34 @@ var __dshStoreClient = (() => {
   var NS = "dsh-store-market";
   var SIDEBAR_PANEL_ID = "dsh-store-market";
   function StoreFrame() {
-    return import_react.default.createElement("iframe", {
-      src: "/dsh-store/",
-      title: "DSH \u63D2\u4EF6\u5546\u5E97",
-      style: {
-        width: "100%",
-        height: "100%",
-        minHeight: "72vh",
-        border: "0",
-        background: "#ffffff",
-        display: "block"
-      }
-    });
+    return import_react.default.createElement(
+      "div",
+      {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          minHeight: "calc(100vh - 118px)",
+          background: "#ffffff"
+        }
+      },
+      import_react.default.createElement(
+        "div",
+        { style: { flex: 1, minHeight: 0, position: "relative" } },
+        import_react.default.createElement("iframe", {
+          src: "/dsh-store/",
+          title: "DSH \u63D2\u4EF6\u5546\u5E97",
+          style: {
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            border: "0",
+            display: "block"
+          }
+        })
+      )
+    );
   }
   function StoreLogo() {
     return import_react.default.createElement(

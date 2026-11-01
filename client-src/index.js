@@ -23,18 +23,37 @@ const NS = 'dsh-store-market'
 const SIDEBAR_PANEL_ID = 'dsh-store-market'
 
 function StoreFrame() {
-  return React.createElement('iframe', {
-    src: '/dsh-store/',
-    title: 'DSH 插件商店',
-    style: {
-      width: '100%',
-      height: '100%',
-      minHeight: '72vh',
-      border: '0',
-      background: '#ffffff',
-      display: 'block',
+  // Flex root + absolute iframe: fills the settings section regardless of how
+  // the host resolves percentage heights through its display:contents wrapper
+  // (same pattern as dsh-model-full's .mf-frame-wrap).
+  return React.createElement(
+    'div',
+    {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 'calc(100vh - 118px)',
+        background: '#ffffff',
+      },
     },
-  })
+    React.createElement(
+      'div',
+      { style: { flex: 1, minHeight: 0, position: 'relative' } },
+      React.createElement('iframe', {
+        src: '/dsh-store/',
+        title: 'DSH 插件商店',
+        style: {
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          border: '0',
+          display: 'block',
+        },
+      }),
+    ),
+  )
 }
 
 function StoreLogo() {
