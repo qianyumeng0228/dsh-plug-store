@@ -87,32 +87,28 @@ function StoreFrame() {
 }
 
 function StoreLogo() {
-  // Simple store glyph for the sidebar row; mask-free inline SVG.
+  // Whale + "+" spout, single color (inherits currentColor) so it adapts to the
+  // host's light/dark sidebar. The eye is an even-odd hole, not a second fill.
   return React.createElement(
     'svg',
     {
       width: 16,
       height: 16,
-      viewBox: '0 0 16 16',
+      viewBox: '0 0 64 64',
       'aria-hidden': 'true',
       style: { display: 'block' },
     },
-    React.createElement('rect', {
-      x: 1.5,
-      y: 1.5,
-      width: 13,
-      height: 13,
-      rx: 3,
-      fill: 'currentColor',
-      opacity: 0.9,
-    }),
     React.createElement('path', {
-      d: 'M5 7.5h6M5 10h4',
-      stroke: '#fff',
-      strokeWidth: 1.4,
-      strokeLinecap: 'round',
-      fill: 'none',
+      fill: 'currentColor',
+      fillRule: 'evenodd',
+      d: 'M7 22c8 4 14 9 16 14 3-6 10-10 18-10 11 0 17 6 17 12 0 7-7 12-17 12-9 0-15-4-18-9-2 5-8 9-16 12 4-7 5-13 5-17 0-5-2-10-5-16zM50 32.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 1 0 0-6.8z',
     }),
+    React.createElement(
+      'g',
+      { stroke: 'currentColor', strokeWidth: 5.5, strokeLinecap: 'round' },
+      React.createElement('path', { d: 'M48 6v10' }),
+      React.createElement('path', { d: 'M43 11h10' }),
+    ),
   )
 }
 
