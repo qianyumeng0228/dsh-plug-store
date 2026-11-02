@@ -89,11 +89,25 @@ function profileDir(profile) {
   return join(home, 'profiles', profile)
 }
 
-function dshProfileOf(config, ctx) {
+/**
+ * 本插件自身的安装路径 -> 宿主实际加载它的 profile。
+ * 路径形如 ~/.dsh/profiles/<profile>/node_modules/dsh-store-market/index.js，
+ * 桌面端里 DSH_PROFILE 是 'desktop'，早先的实现把它当无效值丢掉、硬回落 'web'，
+ * 导致在桌面端装插件却写进 web profile，界面里看不到、已装列表也不对。
+ */
+function profileFromBundlePath() {
+  try {
+    const p = dirname(fileURLToPath(import.meta.url)).replace(/\\/g, '/')
+    const m = p.match(/\/profiles\/([^/]+)\/node_modules\//)
+    return m ? m[1] : ''
+  } catch {
+    return ''
+  }
+}
+
+function dshProfileOf(config) {
   if (config && typeof config.profile === 'string' && config.profile) return config.profile
-  const env = process.env.DSH_PROFILE
-  if (env && env !== 'desktop') return env
-  return 'web'
+  return profileFromBundlePath() || process.env.DSH_PROFILE || 'web'
 }
 
 /** 解析 dsh CLI 的真实调用方式：优先直接跑宿主 exe（无 shell 转义问题） */
@@ -180,6 +194,26 @@ function bundleDirOfSelf() {
 
 const NPM_NAME_RE = /^(@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._][A-Za-z0-9._-]*$/
 const GH_REPO_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*\/[A-Za-z0-9._][A-Za-z0-9._-]*$/
+const LOOPBACK_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i
+
+/**
+ * 宿主根路径要 token，插件路由却是全开的：本机任意网页都能对 /dsh-store/api/install
+ * 发请求，DNS rebinding 还能绕过同源检查。这里要求回环 Host + 自定义头
+ * （自定义头会触发浏览器预检，跨源页面带不上），商店前端的 api 调用都带上该头。
+ * 商店页面与 /data/plugins.json 是公开目录数据，不设限。
+ */
+function apiAllowed(req, res) {
+  const host = String((req.headers && req.headers.host) || '')
+  if (!LOOPBACK_RE.test(host)) {
+    sendJson(res, 403, { error: 'non-loopback host' })
+    return false
+  }
+  if (String((req.headers && req.headers['x-dsh-store']) || '') !== '1') {
+    sendJson(res, 403, { error: 'missing x-dsh-store: 1 header' })
+    return false
+  }
+  return true
+}
 
 /**
  * 把前端传来的插件标识解析成 dsh CLI 安装参数。
@@ -228,14 +262,16 @@ async function fetchJson(url, timeoutMs = 15000) {
 export function apply(ctx, config = {}) {
   ctx.inject(['webServer'], (hostCtx) => {
     const server = hostCtx.webServer
-    const profile = dshProfileOf(config, hostCtx)
+    const profile = dshProfileOf(config)
     const disposers = []
 
     const route = (method, path, handler) => {
+      const isApi = path.startsWith('/dsh-store/api/')
       disposers.push(server.register({
         kind: 'exact',
         path,
         handler: (request, response) => {
+          if (isApi && !apiAllowed(request, response)) return
           if (request.method !== method) {
             response.writeHead(405, { allow: method })
             response.end()
@@ -264,7 +300,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.1',
+        version: '0.1.2',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
