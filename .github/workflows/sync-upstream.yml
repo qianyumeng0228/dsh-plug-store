@@ -1,0 +1,48 @@
+name: sync-upstream
+
+# dsh-store 是 UI 与数据的唯一来源；本仓库的 site/ 副本与数据快照由这里同步，
+# 避免两仓库各自手改同一份 index.html 造成漂移。
+on:
+  schedule:
+    - cron: "13 4 * * 1"   # 每周一 04:13 UTC 刷新数据快照
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull site/index.html from dsh-store
+        run: |
+          curl -fsSL --retry 3 --connect-timeout 20 \
+            -o site/index.html \
+            https://raw.githubusercontent.com/qianyumeng0228/dsh-store/main/site/index.html
+          test -s site/index.html
+
+      - name: Pull data snapshot from GitHub Pages
+        run: |
+          mkdir -p site/data
+          curl -fsSL --retry 3 --connect-timeout 30 \
+            -o site/data/plugins.json \
+            https://qianyumeng0228.github.io/dsh-store/data/plugins.json
+          python3 -c "import json;d=json.load(open('site/data/plugins.json'));print('snapshot:',d['updated'],'total:',d['total'],'installable:',d['installable'])"
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- site/index.html site/data/plugins.json; then
+            echo "up to date; nothing to commit"
+          else
+            git add site/index.html site/data/plugins.json
+            git commit -m "chore(site): sync UI + data snapshot from dsh-store [skip ci]"
+            git push origin master
+          fi

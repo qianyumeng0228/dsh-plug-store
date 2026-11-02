@@ -178,6 +178,24 @@ function bundleDirOfSelf() {
   return dirname(fileURLToPath(import.meta.url))
 }
 
+const NPM_NAME_RE = /^(@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._][A-Za-z0-9._-]*$/
+const GH_REPO_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*\/[A-Za-z0-9._][A-Za-z0-9._-]*$/
+
+/**
+ * 把前端传来的插件标识解析成 dsh CLI 安装参数。
+ * git 源必须拿到完整 owner/repo（只用仓库名末段会拼出 `github:dsh-xxx` 这种无效参数），
+ * 同时拒绝以 - 开头的值，避免被 CLI 当成选项解析。合法返回 {source, arg, target}，否则 null。
+ */
+function installPlan(body) {
+  const source = body && body.source === 'github' ? 'github' : 'npm'
+  if (source === 'github') {
+    const repo = String((body && (body.repo || body.name)) || '').trim().replace(/^github:/i, '')
+    return GH_REPO_RE.test(repo) ? { source, arg: `github:${repo}`, target: repo } : null
+  }
+  const name = String((body && body.name) || '').trim()
+  return NPM_NAME_RE.test(name) ? { source, arg: name, target: name } : null
+}
+
 function localDataFiles() {
   const dir = join(bundleDirOfSelf(), 'site', 'data')
   const pluginsFile = join(dir, 'plugins.json')
@@ -246,7 +264,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.0',
+        version: '0.1.1',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -258,7 +276,13 @@ export function apply(ctx, config = {}) {
 
     route('GET', '/dsh-store/api/installed', (req, res) => {
       try {
-        sendJson(res, 200, { profile, installed: readInstalled(profile) })
+        const entries = readInstalled(profile)
+        // installed 给名字数组（前端按名字判断已装），installedDetails 保留来源信息
+        sendJson(res, 200, {
+          profile,
+          installed: entries.map((e) => e.name),
+          installedDetails: entries,
+        })
       } catch (e) {
         sendJson(res, 500, { error: String(e?.message || e) })
       }
@@ -272,17 +296,15 @@ export function apply(ctx, config = {}) {
         sendJson(res, 400, { error: 'invalid JSON body' })
         return
       }
-      const source = body.source === 'github' ? 'github' : 'npm'
-      const target = String(body.name || body.repo || '').trim()
-      if (!target) {
-        sendJson(res, 400, { error: 'missing name/repo' })
+      const plan = installPlan(body)
+      if (!plan) {
+        sendJson(res, 400, { error: 'invalid plugin identifier', hint: 'npm 源要包名，github 源要 owner/repo' })
         return
       }
-      const arg = source === 'github' ? `github:${target}` : target
-      const result = await runDsh(['plugin', '--profile', profile, 'add', arg], { timeout: 300000 })
+      const result = await runDsh(['plugin', '--profile', profile, 'add', plan.arg], { timeout: 300000 })
       sendJson(res, result.code === 0 ? 200 : 500, {
-        source,
-        target: arg,
+        source: plan.source,
+        target: plan.arg,
         ok: result.code === 0,
         code: result.code,
         output: (result.stdout + result.stderr).slice(-8000),
@@ -299,8 +321,8 @@ export function apply(ctx, config = {}) {
         return
       }
       const name = String(body.name || '').trim()
-      if (!name) {
-        sendJson(res, 400, { error: 'missing name' })
+      if (!name || !NPM_NAME_RE.test(name)) {
+        sendJson(res, 400, { error: 'missing or invalid name' })
         return
       }
       const result = await runDsh(['plugin', '--profile', profile, 'remove', name], { timeout: 300000 })
@@ -321,16 +343,16 @@ export function apply(ctx, config = {}) {
         sendJson(res, 400, { error: 'invalid JSON body' })
         return
       }
-      const name = String(body.name || '').trim()
-      if (!name) {
-        sendJson(res, 400, { error: 'missing name' })
+      const plan = installPlan(body)
+      if (!plan) {
+        sendJson(res, 400, { error: 'invalid plugin identifier', hint: 'npm 源要包名，github 源要 owner/repo' })
         return
       }
-      const source = body.source === 'github' ? 'github' : 'npm'
-      const target = body.repo ? `github:${body.repo}` : name
-      const result = await runDsh(['plugin', '--profile', profile, 'add', target], { timeout: 300000 })
+      const result = await runDsh(['plugin', '--profile', profile, 'add', plan.arg], { timeout: 300000 })
       sendJson(res, result.code === 0 ? 200 : 500, {
-        name,
+        name: plan.target,
+        source: plan.source,
+        target: plan.arg,
         ok: result.code === 0,
         code: result.code,
         output: (result.stdout + result.stderr).slice(-8000),

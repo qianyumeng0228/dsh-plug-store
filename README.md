@@ -48,20 +48,39 @@ dsh-store-market/
 ├── index.js            # 宿主插件：挂 /dsh-store/* 路由 + dsh CLI 子进程 API（零依赖）
 ├── cordis.patch.yml    # 插件层声明（dsh.bundle.patch）
 ├── client/client.js    # 客户端 bundle：设置页/插件页注册「插件商店」section（iframe 嵌入）
-├── site/index.html     # 商店 UI（与静态站同一份文件，检测到宿主 API 自动启用宿主模式）
+├── site/index.html     # 商店 UI（由 sync-upstream 从 dsh-store 同步；检测到宿主 API 自动启用宿主模式）
+├── site/data/plugins.json  # 数据快照（同上，随版本更新）
+├── .github/workflows/sync-upstream.yml  # 从上游同步 UI 与数据快照
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
+
+## 已验证（0.1.1，本地 mock 宿主契约实测）
+
+- [x] 宿主模式启用后「已安装」页与 ✓ 标记正确：npm 插件按包名匹配，git 插件按 `installedDetails[].repo` 匹配（此前 `installed` 是对象数组，前端按名字判断恒 false，已安装页永远为空）
+- [x] git 插件安装载荷为 `{source:"github", repo:"owner/repo", name}`，服务端拼出 `github:owner/repo`（此前取 name 得到 `github:仓库名` 必失败）
+- [x] git 插件更新不再因缺 `name` 被 400 拒绝（此前"全部更新"对 git 插件必然失败）
+- [x] 顶部「全部更新」计数只统计"已装且有新版"，与按钮实际行为一致
+- [x] 安装/卸载/更新后重新拉取 `api/installed`，本机状态不与前端缓存漂移
+- [x] iframe 内嵌：文档 `html.inframe` 生效，页面自身不出现在第二条滚动条，默认卡片视图；独立站点仍为列表视图 + 正常滚动
+- [x] 以 `-` 开头 / 非 `owner/repo` 形态的标识被 400 拒绝，不进入 `dsh` CLI 参数
 
 ## 宿主 API
 
 - `GET  /dsh-store/api/capabilities` — 宿主能力探测（前端据此启用宿主模式）
-- `GET  /dsh-store/api/installed` — 本机真实已装插件（读 profile package.json）
-- `POST /dsh-store/api/install`   — `{source:"npm",name}` 或 `{source:"github",repo}` 真实安装
+- `GET  /dsh-store/api/installed` — `{profile, installed:[包名…], installedDetails:[{name,version,kind,repo,bundle}…]}`
+  前端用 `installed` 按名字匹配 npm 插件，用 `installedDetails[].repo` 匹配 git 插件（目录展示名与本机依赖键常不一致，两个都得比）
+- `POST /dsh-store/api/install`   — `{source:"npm", name}` 或 `{source:"github", repo:"owner/repo"}` 真实安装
 - `POST /dsh-store/api/uninstall` — `{name}` 真实卸载
-- `POST /dsh-store/api/update`    — 重装到最新（npm latest / git 默认分支）
+- `POST /dsh-store/api/update`    — 载荷同 install，重装到最新（npm latest / git 默认分支）
 - `GET  /dsh-store/api/diagnose`  — dsh CLI / profile / 数据源健康检查
 - `GET  /dsh-store/api/backup`    — 导出 profile 配置备份 JSON
-- `GET  /dsh-store/data/plugins.json` — 数据代理（每日与线上同步）
+- `GET  /dsh-store/data/plugins.json` — 数据代理（快照缺失时回退远程）
+
+标识校验：npm 源必须是包名，github 源必须是完整 `owner/repo`（只给仓库名末段会拼出 `github:dsh-xxx` 这种无效参数），以 `-` 开头的值一律拒绝，避免被 `dsh` CLI 当成选项。
+
+## 与 dsh-store 的关系
+
+`site/index.html` 与 `site/data/plugins.json` 都来自 [qianyumeng0228/dsh-store](https://github.com/qianyumeng0228/dsh-store)，由 `.github/workflows/sync-upstream.yml`（每周一 + 手动）从上游拉取并提交，**不要直接改本仓库这两份文件**：UI 的改动请在 dsh-store 里做，宿主专用差异（iframe 内不出现第二条滚动条、默认卡片视图）已由页面运行时检测，两份文件保持字节一致。
 
 ## 配置（cordis.yml）
 
