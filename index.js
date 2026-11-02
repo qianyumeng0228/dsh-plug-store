@@ -289,7 +289,12 @@ export function apply(ctx, config = {}) {
         sendText(res, 404, 'ui not found')
         return
       }
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        // 页面与 api 必须同版本：0.1.2 起 api 要求自定义头，
+        // 浏览器若拿旧缓存的页面会全量 403，故不缓存。
+        'cache-control': 'no-store',
+      })
       res.end(readFileSync(page))
     }
     route('GET', '/dsh-store/', serveUi)
