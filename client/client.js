@@ -34,9 +34,9 @@ var __dshStoreClient = (() => {
   ));
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // dsh-store-market/client-src/index.js
-  var client_src_exports = {};
-  __export(client_src_exports, {
+  // client-src/index.js
+  var index_exports = {};
+  __export(index_exports, {
     apply: () => apply,
     inject: () => inject,
     name: () => name
@@ -47,33 +47,62 @@ var __dshStoreClient = (() => {
   var NS = "dsh-store-market";
   var SIDEBAR_PANEL_ID = "dsh-store-market";
   function StoreFrame() {
+    const frameRef = import_react.default.useRef(null);
+    import_react.default.useEffect(() => {
+      const sync = () => {
+        const f = frameRef.current;
+        if (!f) return;
+        try {
+          const doc = f.contentDocument;
+          const h = Math.max(
+            doc.documentElement.scrollHeight,
+            doc.body ? doc.body.scrollHeight : 0
+          );
+          const cur = parseFloat(f.style.height || "");
+          if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) {
+            f.style.height = h + "px";
+          }
+        } catch (e) {
+        }
+      };
+      sync();
+      const timer = setInterval(sync, 500);
+      return () => clearInterval(timer);
+    }, []);
+    const onLoad = () => {
+      const f = frameRef.current;
+      if (!f) return;
+      try {
+        const doc = f.contentDocument;
+        const h = Math.max(
+          doc.documentElement.scrollHeight,
+          doc.body ? doc.body.scrollHeight : 0
+        );
+        if (h > 0) f.style.height = h + "px";
+      } catch (e) {
+      }
+    };
     return import_react.default.createElement(
       "div",
       {
         style: {
-          display: "flex",
-          flexDirection: "column",
-          height: "100%",
+          display: "block",
           minHeight: "calc(100vh - 92px)",
           background: "#ffffff"
         }
       },
-      import_react.default.createElement(
-        "div",
-        { style: { flex: 1, minHeight: 0, position: "relative" } },
-        import_react.default.createElement("iframe", {
-          src: "/dsh-store/",
-          title: "DSH \u63D2\u4EF6\u5546\u5E97",
-          style: {
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            border: "0",
-            display: "block"
-          }
-        })
-      )
+      import_react.default.createElement("iframe", {
+        ref: frameRef,
+        src: "/dsh-store/",
+        title: "DSH \u63D2\u4EF6\u5546\u5E97",
+        onLoad,
+        style: {
+          width: "100%",
+          height: "calc(100vh - 92px)",
+          border: "0",
+          display: "block"
+        }
+      })
     );
   }
   function StoreLogo() {
@@ -201,8 +230,7 @@ var __dshStoreClient = (() => {
       console.error("[dsh-store-market] client mount failed; store missing this session", error);
     }
   }
-  return __toCommonJS(client_src_exports);
+  return __toCommonJS(index_exports);
 })();
-
 return __dshStoreClient;
 } });

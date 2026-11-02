@@ -23,36 +23,66 @@ const NS = 'dsh-store-market'
 const SIDEBAR_PANEL_ID = 'dsh-store-market'
 
 function StoreFrame() {
-  // Flex root + absolute iframe: fills the settings section regardless of how
-  // the host resolves percentage heights through its display:contents wrapper
-  // (same pattern as dsh-model-full's .mf-frame-wrap).
+  // The iframe height tracks its document's content height, so the host
+  // section scrollbar is the ONLY scrollbar: no scrollbar appears inside the
+  // iframe (site html/body are overflow:hidden) and the store content is fully
+  // browsable through the host's right-hand scrollbar (same feel as dshmarket).
+  const frameRef = React.useRef(null)
+  React.useEffect(() => {
+    const sync = () => {
+      const f = frameRef.current
+      if (!f) return
+      try {
+        const doc = f.contentDocument
+        const h = Math.max(
+          doc.documentElement.scrollHeight,
+          doc.body ? doc.body.scrollHeight : 0
+        )
+        const cur = parseFloat(f.style.height || '')
+        if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) {
+          f.style.height = h + 'px'
+        }
+      } catch (e) {
+        /* cross-origin or not loaded yet */
+      }
+    }
+    sync()
+    const timer = setInterval(sync, 500)
+    return () => clearInterval(timer)
+  }, [])
+  const onLoad = () => {
+    const f = frameRef.current
+    if (!f) return
+    try {
+      const doc = f.contentDocument
+      const h = Math.max(
+        doc.documentElement.scrollHeight,
+        doc.body ? doc.body.scrollHeight : 0
+      )
+      if (h > 0) f.style.height = h + 'px'
+    } catch (e) {}
+  }
   return React.createElement(
     'div',
     {
       style: {
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
+        display: 'block',
         minHeight: 'calc(100vh - 92px)',
         background: '#ffffff',
       },
     },
-    React.createElement(
-      'div',
-      { style: { flex: 1, minHeight: 0, position: 'relative' } },
-      React.createElement('iframe', {
-        src: '/dsh-store/',
-        title: 'DSH 插件商店',
-        style: {
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          border: '0',
-          display: 'block',
-        },
-      }),
-    ),
+    React.createElement('iframe', {
+      ref: frameRef,
+      src: '/dsh-store/',
+      title: 'DSH 插件商店',
+      onLoad,
+      style: {
+        width: '100%',
+        height: 'calc(100vh - 92px)',
+        border: '0',
+        display: 'block',
+      },
+    }),
   )
 }
 
