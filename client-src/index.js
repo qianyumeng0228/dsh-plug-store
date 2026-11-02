@@ -33,7 +33,7 @@ function StoreFrame() {
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        minHeight: 'calc(100vh - 118px)',
+        minHeight: 'calc(100vh - 92px)',
         background: '#ffffff',
       },
     },

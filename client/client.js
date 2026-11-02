@@ -1,4 +1,3 @@
-window.__ModuleLoader__.load({ id: "dsh-store-market", factory: (require) => {
 var __dshStoreClient = (() => {
   var __create = Object.create;
   var __defProp = Object.defineProperty;
@@ -34,9 +33,9 @@ var __dshStoreClient = (() => {
   ));
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // dsh-store-market/client-src/index.js
-  var client_src_exports = {};
-  __export(client_src_exports, {
+  // client-src/index.js
+  var index_exports = {};
+  __export(index_exports, {
     apply: () => apply,
     inject: () => inject,
     name: () => name
@@ -54,7 +53,7 @@ var __dshStoreClient = (() => {
           display: "flex",
           flexDirection: "column",
           height: "100%",
-          minHeight: "calc(100vh - 118px)",
+          minHeight: "calc(100vh - 92px)",
           background: "#ffffff"
         }
       },
@@ -201,8 +200,5 @@ var __dshStoreClient = (() => {
       console.error("[dsh-store-market] client mount failed; store missing this session", error);
     }
   }
-  return __toCommonJS(client_src_exports);
+  return __toCommonJS(index_exports);
 })();
-
-return __dshStoreClient;
-} });

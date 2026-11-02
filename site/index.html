@@ -20,7 +20,7 @@
     --mono:ui-monospace,SFMono-Regular,Consolas,"Cascadia Code",monospace;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14.5px;line-height:1.55}
+  html,body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14.5px;line-height:1.55;overflow-y:auto;height:auto}
   a{color:var(--link);text-decoration:none}
   a:hover{text-decoration:underline}
   button{font-family:inherit}
@@ -396,7 +396,7 @@
 const PAGE = 40;
 let DATA = null, shownCount = 0, curPlugin = null, modalLang = "zh";
 const state = { tab:"discover", q:"", cat:"all", sort:"stars", dir:"desc", since:"all", src:"all",
-                filters:new Set(), view:"row", dshVer: localStorage.getItem("dsh-dshver") || "" };
+                filters:new Set(), view:"card", dshVer: localStorage.getItem("dsh-dshver") || "" };
 const SORTS = [["downloads","近30天下载量"],["stars","Star 数"],["added","收录时间"],["updated","最近更新"],["name","名称"],["random","随机"]];
 const SINCES = [["all","全部时间"],["1d","最近1天"],["7d","最近7天"],["30d","最近30天"],["90d","最近90天"],["1y","最近1年"]];
 const SRCS = [["all","全部来源"],["npm","npm"],["git","GitHub"]];
