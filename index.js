@@ -163,6 +163,22 @@ function runDsh(args, opts = {}) {
   })
 }
 
+/**
+ * 从 profile 依赖版本号里解析 owner/repo。三种真实写法都要覆盖：
+ *   github:owner/repo                       —— dsh plugin add github:... 写入的形式
+ *   git+https://github.com/owner/repo.git   —— 带 .git 后缀，必须去掉才能和目录里的 repo 对上
+ *   https://codeload.github.com/owner/repo/tar.gz/refs/heads/branch
+ * 早先只匹配 github.com 且不去 .git，导致前两种都拿不到 repo，
+ * 前端按 repo 匹配 git 插件的「已装」状态于是永远不命中。
+ */
+const GIT_REPO_RE = /(?:github\.com[/:]|^github:)([^/#\s]+)\/([^/#?\s]+)/i
+
+function gitRepoOf(version) {
+  const m = String(version).match(GIT_REPO_RE)
+  if (!m) return undefined
+  return `${m[1]}/${m[2].replace(/\.git$/, '')}`
+}
+
 function readInstalled(profile) {
   const dir = profileDir(profile)
   const pkgFile = join(dir, 'package.json')
@@ -173,13 +189,12 @@ function readInstalled(profile) {
     const bundles = Array.isArray(pkg.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles : []
     return Object.entries(deps).map(([name, version]) => {
       const isBundle = bundles.includes(name)
-      const isGit = /^(github:|git\+|https:\/\/github)/i.test(String(version))
-      const gitMatch = String(version).match(/github\.com[/:]([^/#]+)\/([^/#]+)/i)
+      const repo = gitRepoOf(version)
       return {
         name,
         version: String(version),
-        kind: isGit ? 'git' : 'npm',
-        repo: gitMatch ? `${gitMatch[1]}/${gitMatch[2]}` : undefined,
+        kind: repo ? 'git' : 'npm',
+        repo,
         bundle: isBundle,
       }
     })
@@ -305,7 +320,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.2',
+        version: '0.1.3',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
