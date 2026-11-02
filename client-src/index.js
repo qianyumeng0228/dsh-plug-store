@@ -87,8 +87,8 @@ function StoreFrame() {
 }
 
 function StoreLogo() {
-  // Whale + "+" spout, single color (inherits currentColor) so it adapts to the
-  // host's light/dark sidebar. The eye is an even-odd hole, not a second fill.
+  // Shopping bag + "+" mark, single color (inherits currentColor) so it adapts to
+  // the host's light/dark sidebar. The plus is an even-odd hole in the bag body.
   return React.createElement(
     'svg',
     {
@@ -99,16 +99,17 @@ function StoreLogo() {
       style: { display: 'block' },
     },
     React.createElement('path', {
+      d: 'M27 26.5v-6a5 5 0 0 1 10 0v6',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 4.4,
+      strokeLinecap: 'round',
+    }),
+    React.createElement('path', {
       fill: 'currentColor',
       fillRule: 'evenodd',
-      d: 'M7 22c8 4 14 9 16 14 3-6 10-10 18-10 11 0 17 6 17 12 0 7-7 12-17 12-9 0-15-4-18-9-2 5-8 9-16 12 4-7 5-13 5-17 0-5-2-10-5-16zM50 32.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 1 0 0-6.8z',
+      d: 'M19.4 26H44.3a3.2 3.2 0 0 1 3.16 3.14L44 44.46A3.2 3.2 0 0 1 40.84 47.6H23.8a3.2 3.2 0 0 1-3.04-3.14L16.84 29.14A3.2 3.2 0 0 1 19.4 26zM29.4 31h5.2v3.9h3.9v5.2h-3.9v3.9h-5.2v-3.9h-3.9v-5.2h3.9z',
     }),
-    React.createElement(
-      'g',
-      { stroke: 'currentColor', strokeWidth: 5.5, strokeLinecap: 'round' },
-      React.createElement('path', { d: 'M48 6v10' }),
-      React.createElement('path', { d: 'M43 11h10' }),
-    ),
   )
 }
 
