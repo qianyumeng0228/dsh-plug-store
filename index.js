@@ -243,15 +243,25 @@ function apiAllowed(req, res) {
  * 把前端传来的插件标识解析成 dsh CLI 安装参数。
  * git 源必须拿到完整 owner/repo（只用仓库名末段会拼出 `github:dsh-xxx` 这种无效参数），
  * 同时拒绝以 - 开头的值，避免被 CLI 当成选项解析。合法返回 {source, arg, target}，否则 null。
+ *
+ * 更新场景必须带 version/ref：`pnpm add <pkg>` 对已装的包会回 "Already up to date"
+ * 且退出码 0，不写版本就等于什么都没做却报成功。version/ref 走白名单字符校验，
+ * 不合法直接判无效标识，绝不把用户输入原样拼进 spec。
  */
 function installPlan(body) {
   const source = body && body.source === 'github' ? 'github' : 'npm'
   if (source === 'github') {
     const repo = String((body && (body.repo || body.name)) || '').trim().replace(/^github:/i, '')
-    return GH_REPO_RE.test(repo) ? { source, arg: `github:${repo}`, target: repo } : null
+    if (!GH_REPO_RE.test(repo)) return null
+    const ref = String((body && body.ref) || '').trim()
+    if (ref && !/^[A-Za-z0-9._/-]{1,80}$/.test(ref)) return null
+    return { source, arg: ref ? `github:${repo}#${ref}` : `github:${repo}`, target: repo, ref }
   }
   const name = String((body && body.name) || '').trim()
-  return NPM_NAME_RE.test(name) ? { source, arg: name, target: name } : null
+  if (!NPM_NAME_RE.test(name)) return null
+  const version = String((body && body.version) || '').trim()
+  if (version && !/^(?!-)[A-Za-z0-9._+-]{1,60}$/.test(version)) return null
+  return { source, arg: version ? `${name}@${version}` : name, target: name, version }
 }
 
 function localDataFiles() {
@@ -390,7 +400,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.17',
+        version: '0.1.18',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -471,18 +481,37 @@ export function apply(ctx, config = {}) {
       }
       const plan = installPlan(body)
       if (!plan) {
-        sendJson(res, 400, { error: 'invalid plugin identifier', hint: 'npm 源要包名，github 源要 owner/repo' })
+        sendJson(res, 400, { error: 'invalid plugin identifier', hint: 'npm 源要包名（可带 version），github 源要 owner/repo（可带 ref）' })
         return
       }
+      // 更新是否真的发生，只能回读 package.json 里的依赖版本：pnpm 判定"已是最新"时
+      // 退出码同样是 0，光看退出码就会把空转报成成功（这正是"更新没反应"的由来）。
+      const depVersion = (list) => {
+        const repo = plan.source === 'github' ? plan.target.toLowerCase() : ''
+        const e = list.find((x) => x.name === plan.target ||
+          (repo && x.repo && String(x.repo).toLowerCase() === repo))
+        return e ? String(e.version) : ''
+      }
+      const from = depVersion(readInstalled(profile))
       const result = await runDsh(['plugin', '--profile', profile, 'add', plan.arg], { timeout: 300000 })
-      sendJson(res, result.code === 0 ? 200 : 500, {
+      const to = depVersion(readInstalled(profile))
+      const changed = !!to && to !== from
+      const code = result.code
+      sendJson(res, code === 0 ? 200 : 500, {
         name: plan.target,
         source: plan.source,
         target: plan.arg,
-        ok: result.code === 0,
-        code: result.code,
+        ok: code === 0,
+        code,
+        from,
+        to,
+        changed,
         output: (result.stdout + result.stderr).slice(-8000),
-        note: result.code === 0 ? '已更新到最新，重启后生效' : '更新失败，详见 output',
+        note: code !== 0
+          ? '更新失败，详见 output'
+          : changed
+            ? `已更新 ${from || '（原先未装）'} → ${to}，重启后生效`
+            : `版本未变化（本机 ${from || '未知'}），pnpm 判定已是最新；若确需升级请核对目录里的目标版本`,
       })
     })
 

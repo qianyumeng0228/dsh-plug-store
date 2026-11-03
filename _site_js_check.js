@@ -1,0 +1,1325 @@
+
+const PER_PAGE_CHOICES = [24, 48, 96];
+const IN_FRAME = (()=>{ try { return window.self !== window.top } catch(e){ return true } })();
+if (IN_FRAME) document.documentElement.classList.add("inframe");
+let DATA = null, curPlugin = null, modalLang = "zh", modalTr = "", lastListSig = "";
+const state = { tab:"discover", q:"", cat:"all", sort:"stars", dir:"desc", since:"all", src:"all",
+                filters:new Set(), view: localStorage.getItem("dsh-view") || (IN_FRAME?"card":"row"),
+                dshVer: localStorage.getItem("dsh-dshver") || "",
+                page: 1,
+                perPage: (()=>{ const n=+localStorage.getItem("dsh-perpage"); return PER_PAGE_CHOICES.includes(n)?n:24 })() };
+const SORTS = [["downloads","近30天下载量"],["stars","Star 数"],["added","收录时间"],["updated","最近更新"],["name","名称"],["random","随机"]];
+const SINCES = [["all","全部时间"],["1d","最近1天"],["7d","最近7天"],["30d","最近30天"],["90d","最近90天"],["1y","最近1年"]];
+const SRCS = [["all","全部来源"],["npm","npm"],["git","GitHub"]];
+const CONDS = [["inst","可安装"],["off","官方"],["new","7天内新增"],["update","🔄 有新版本"],["fav","收藏"],["installed","已安装"]];
+
+let favs = new Set(JSON.parse(localStorage.getItem("dsh-favs")||"[]"));
+let installed = new Set(JSON.parse(localStorage.getItem("dsh-installed")||"[]"));
+let blocked = new Set(JSON.parse(localStorage.getItem("dsh-blocked")||"[]"));
+let queue = new Set(JSON.parse(localStorage.getItem("dsh-queue")||"[]"));
+let installedRepos = new Set();   // 宿主模式：本机已装 git 插件的 owner/repo（小写）
+let installedDetails = [];        // 宿主模式：本机依赖明细，卸载时要按真实依赖键来
+/* ---------- 本机可更新判定 ----------
+   目录里的 hasUpdate 说的是「本站收录版本落后于 registry latest」，跟本机装的
+   什么版本无关：装了 1.14.16、目录已经 1.17.2 的插件 hasUpdate 反而是 false，
+   用户点更新被告知"没有可更新的"。可更新必须按「本机版本 < 目标版本」判。 */
+const CJK_RE = /[\u4e00-\u9fff]/;
+function hasCJK(s){ return CJK_RE.test(String(s||"")); }
+/* 描述中文优先：机翻后 desc 是中文、descEn 是原文；老快照里 desc 可能仍是英文，
+   那就退回 descEn，不拿英文冒充中文档 */
+function pickDesc(p){ if (!p) return ""; return hasCJK(p.desc) ? p.desc : (p.descEn || p.desc || ""); }
+function zhDesc(p){ return (p && hasCJK(p.desc)) ? p.desc : ""; }
+function normVer(v){ return String(v||"").replace(/^[\^~>=<\s]+/,"").trim(); }
+/* 非 registry 装的依赖绝不自动重装：file:/link:/workspace: 是本地开发链，
+   用 npm 版覆盖会直接毁掉用户自己的改动 */
+const NON_REGISTRY_RE = /^(file:|link:|workspace:|git\+|github:|https?:|ssh:)/i;
+function installedSpecOf(p){
+  const repo = p && p.repo ? String(p.repo).toLowerCase() : "";
+  const d = installedDetails.find(x => x && (x.name === (p && p.name) ||
+    (repo && x.repo && String(x.repo).toLowerCase() === repo)));
+  return d ? String(d.version || "") : "";
+}
+function verCmp(a, b){
+  const pa = normVer(a).split(/[.\-+]/), pb = normVer(b).split(/[.\-+]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++){
+    const x = pa[i] || "0", y = pb[i] || "0";
+    if (/^\d+$/.test(x) && /^\d+$/.test(y)){ if (+x !== +y) return +x - +y; }
+    else if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+function updateTargetOf(p){ return normVer(p.latestVersion || p.version); }
+function updateAvailable(p){
+  if (!HOST || !p || p.localOnly || !isInstalled(p)) return false;
+  const cur = installedSpecOf(p);
+  if (!cur || NON_REGISTRY_RE.test(cur)) return false;
+  const want = updateTargetOf(p);
+  if (!want) return false;
+  // git 源的"版本"可能是 commit：语义化比较没意义，只能判"不一样就重装到最新"
+  if (p.source === "git" || !/^\d/.test(normVer(cur))) return normVer(cur) !== want;
+  return verCmp(cur, want) < 0;
+}
+/* 目录里的展示名对 git 插件可能带 owner- 前缀，本机依赖键却是包名，故两个都要比 */
+function isInstalled(p){ return installed.has(p.name) || (!!p.repo && installedRepos.has(String(p.repo).toLowerCase())); }
+/* 卸载要用本机真实依赖键：git 插件装进 package.json 的键是它自己的包名，
+   与目录展示名（仓库末段，或撞名时带 owner- 前缀）经常不一致 */
+function depKeyOf(p){
+  const repo = p && p.repo ? String(p.repo).toLowerCase() : "";
+  const d = installedDetails.find(x => x && (x.name === p.name || (repo && x.repo && String(x.repo).toLowerCase() === repo)));
+  return d ? d.name : (p && p.name);
+}
+/* 本机装了但目录里查不到的依赖（其他商店、scoped 包、file: 本地链接）：
+   合成条目纳入「已安装」页，至少可卸载 —— 否则扫到 32 个却只列得出 26 个 */
+function installedExtras(){
+  if (!HOST || !DATA) return [];
+  const known = new Set(DATA.plugins.map(p=>p.name));
+  const knownRepo = new Set(DATA.plugins.filter(p=>p.repo).map(p=>String(p.repo).toLowerCase()));
+  const out = [];
+  for (const e of installedDetails){
+    const nm = e && e.name;
+    if (!nm || known.has(nm)) continue;
+    if (e.repo && knownRepo.has(String(e.repo).toLowerCase())) continue;
+    const v = String(e.version||"");
+    out.push({ name:nm, title:nm, titleEn:nm, cat:"", stars:0, tags:[], repo:e.repo||"",
+      desc:"不在商店目录中（其他渠道或本地链接安装），仍可卸载。", descEn:"",
+      install:null, installable:false, source:e.kind==="git"?"git":"npm",
+      updated:"", added:"", official:false,
+      version: v.startsWith("file:") ? "本地链接" : (e.kind==="git" ? v.replace(/^git\+|^github:/,"") : v),
+      verified:"", downloads:0, author:"", avatar:"", icon:"", dsh:"",
+      latestVersion:"", hasUpdate:false, localOnly:true });
+  }
+  return out;
+}
+/* 主按钮反映本机状态。已安装时不再把「已安装」做成按钮 —— 它看着像状态标签，
+   点下去却执行卸载，既不明显也危险。状态交给徽标，按钮一律是明确动作：更新 / 卸载。 */
+function mainBtnHtml(p, i){
+  if (p.localOnly)
+    return `<button class="install-btn danger" data-inst="${i}" data-act="uninstall" title="从 DSH 卸载">卸载</button>`;
+  if (!isInstalled(p))
+    return p.installable
+      ? `<button class="install-btn" data-inst="${i}" data-act="install" title="${HOST?"真实安装到 DSH":"复制安装命令"}">安装</button>`
+      : `<button class="install-btn pending" disabled title="Git 凭据待补齐">待补</button>`;
+  if (!HOST)
+    return `<button class="install-btn done" data-inst="${i}" data-act="unmark" title="目录站读不到本机状态，这是手动标记">取消标记</button>`;
+  const acts = [];
+  if (updateAvailable(p)) acts.push(`<button class="install-btn upd" data-inst="${i}" data-act="update" title="升级到 v${esc(updateTargetOf(p))}（本机 ${esc(normVer(installedSpecOf(p)) || "未知")}）">更新</button>`);
+  acts.push(`<button class="install-btn danger${updateAvailable(p)?" mini":""}" data-inst="${i}" data-act="uninstall" title="从 DSH 卸载">卸载</button>`);
+  return `<div class="btns">${acts.join("")}</div>`;
+}
+
+/* ---------- 宿主模式（dsh-store-market 插件内运行时启用） ---------- */
+let HOST = null;
+/* 宿主 api 统一入口：带 x-dsh-store 自定义头，跨源页面会被预检挡住，
+   服务端再校验回环 Host，防 DNS rebinding。 */
+async function apiFetch(path, opts){
+  const o = Object.assign({cache:"no-store"}, opts||{});
+  o.headers = Object.assign({'x-dsh-store':'1'}, o.headers||{});
+  return fetch(path, o);
+}
+/* 宿主模式：本机已装状态以宿主 API 为准，任何增删后重新拉取 */
+async function refreshInstalled(){
+  try {
+    const r = await apiFetch("api/installed");
+    if (!r.ok) return;
+    const d = await r.json();
+    installed = new Set(d.installed||[]);
+    installedDetails = Array.isArray(d.installedDetails) ? d.installedDetails : [];
+    installedRepos = new Set(installedDetails.filter(e=>e && e.repo)
+      .map(e=>String(e.repo).toLowerCase()));
+  } catch(e){ /* 保持上一次结果 */ }
+}
+async function probeHost(){
+  try {
+    const r = await apiFetch("api/capabilities");
+    if (!r.ok) return;
+    HOST = await r.json();
+    await refreshInstalled();
+    document.body.classList.add("host");
+    const cb = document.getElementById("copy-all");
+    if (cb) cb.textContent = "全部安装";
+    const qh = document.getElementById("qhint");
+    if (qh) qh.textContent = "点插件上的 ⤓ 加入待装清单，一起真实安装";
+  } catch(e){ HOST = null; }
+}
+/* 宿主 API 载荷：git 源必须带完整 owner/repo，name 同时给出便于回显 */
+function hostPayload(p){
+  return p.source==="git"
+    ? {source:"github", repo:p.repo, name:p.name}
+    : {source:"npm", name:p.name};
+}
+async function hostInstall(p, btn){
+  const old = btn ? btn.textContent : "";
+  if (btn){ btn.textContent = "安装中…"; btn.disabled = true; }
+  try {
+    const r = await apiFetch("api/install", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(hostPayload(p))});
+    const d = await r.json().catch(()=>({}));
+    if (d.ok){ await refreshInstalled(); toast("✓ 已安装 " + p.name); buildTabbar(); render(); }
+    else toast("✗ 安装失败：" + ((d.output||d.error||"未知错误").slice(0,120)));
+  } catch(e){ toast("✗ 安装失败：" + e.message); }
+  if (btn){ btn.textContent = old; btn.disabled = false; }
+}
+async function hostUninstall(p){
+  const key = depKeyOf(p);
+  const shown = (p && p.name) || key;
+  if (!confirm("确认从 DSH 卸载「" + shown + "」？" + (key !== shown ? "（本机依赖键 " + key + "）" : ""))) return;
+  try {
+    const r = await apiFetch("api/uninstall", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:key})});
+    const d = await r.json().catch(()=>({}));
+    if (d.ok){ await refreshInstalled(); toast("✓ 已卸载 " + shown); buildTabbar(); render(); }
+    else toast("✗ 卸载失败：" + ((d.output||d.error||"未知错误").slice(0,120)));
+  } catch(e){ toast("✗ 卸载失败：" + e.message); }
+}
+/* 更新载荷必须显式带目标版本：pnpm 对已装的包执行 `add <pkg>`（不带 spec）会回
+   "Already up to date" 且退出码 0，我们曾据此报「✓ 更新完成」而版本根本没动 ——
+   用户说的"更新没反应"就是这么来的。npm 源统一 @版本，目录没给版本才 @latest。 */
+function hostUpdatePayload(p){
+  const base = hostPayload(p);
+  const want = updateTargetOf(p);
+  if (base.source === "npm") base.version = want || "latest";
+  else if (want) base.ref = want;
+  return base;
+}
+async function hostUpdateAll(upd){
+  let ok = 0, same = 0, fail = 0;
+  for (let i=0;i<upd.length;i++){
+    const p = upd[i];
+    toast(`正在更新 ${i+1}/${upd.length}：${p.name}…`);
+    try {
+      const r = await apiFetch("api/update", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(hostUpdatePayload(p))});
+      const d = await r.json().catch(()=>({}));
+      if (!r.ok || !d.ok) fail++;
+      else if (d.changed === false) same++;
+      else ok++;
+    } catch(e){ fail++; }
+  }
+  const parts = [];
+  if (ok) parts.push(`升级 ${ok} 个`);
+  if (same) parts.push(`${same} 个已是最新`);
+  if (fail) parts.push(`失败 ${fail} 个`);
+  toast((ok || same ? "✓ 更新完成：" : "✗ 更新失败：") + (parts.join("，") || "无变化"));
+  await refreshInstalled(); buildTabbar(); render();
+}
+async function hostUpdateOne(p, btn){
+  const old = btn ? btn.textContent : "";
+  if (btn){ btn.textContent = "更新中…"; btn.disabled = true; }
+  await hostUpdateAll([p]);
+  if (btn){ btn.textContent = old; btn.disabled = false; }
+}
+async function hostInstallAll(qlist){
+  let ok = 0, fail = 0;
+  for (let i=0;i<qlist.length;i++){
+    const p = qlist[i];
+    toast(`正在安装 ${i+1}/${qlist.length}：${p.name}…`);
+    try {
+      const r = await apiFetch("api/install", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(hostPayload(p))});
+      const d = await r.json().catch(()=>({}));
+      if (d.ok){ ok++; queue.delete(p.name); }
+      else fail++;
+    } catch(e){ fail++; }
+  }
+  await refreshInstalled(); save("dsh-queue", queue);
+  toast(ok>0 ? `✓ 安装完成：成功 ${ok} 个${fail?`，失败 ${fail} 个`:""}` : "✗ 全部安装失败");
+  buildTabbar(); render(); renderDock();
+}
+
+function save(key, set){ localStorage.setItem(key, JSON.stringify([...set])); }
+function toast(msg){ const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 1800); }
+function fmtN(n){
+  if (!n) return "0";
+  if (n >= 1e6) return (n/1e6).toFixed(1).replace(/\.0$/,"") + "M";
+  if (n >= 1e3) return (n/1e3).toFixed(1).replace(/\.0$/,"") + "k";
+  return String(n);
+}
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+/* ---------- semver 轻量解析（支持 || 并集、^ ~、>= <= > < =、预发布） ---------- */
+function parseVer(v){
+  if (!v) return null;
+  v = String(v).trim().replace(/^v/, "").split("+")[0];   // 丢掉 build 元数据
+  const dashIdx = v.indexOf("-");
+  const main = dashIdx >= 0 ? v.slice(0, dashIdx) : v;
+  const preRaw = dashIdx >= 0 ? v.slice(dashIdx+1) : "";
+  const parts = main.split(".");
+  /* 认不出的写法（含 1.x 这类通配）返回 null，由调用方按"不隐藏"处理。
+     早先这里把 NaN 当成 0，"weird" 会变成 0.0.0 从而误隐藏插件。 */
+  if (!parts.length || parts.some((x) => x === "" || !/^\d+$/.test(x))) return null;
+  const maj = parseInt(parts[0], 10);
+  const min = parts.length > 1 ? parseInt(parts[1], 10) : 0;
+  const pat = parts.length > 2 ? parseInt(parts[2], 10) : 0;
+  let pre = [];
+  if (preRaw){
+    pre = preRaw.split(".").map(x=> /^\d+$/.test(x) ? {n:parseInt(x,10)} : {s:x});
+  }
+  return {maj, min, pat, pre};
+}
+function cmpVer(a, b){
+  if (!a || !b) return 0;
+  if (a.maj!==b.maj) return a.maj<b.maj?-1:1;
+  if (a.min!==b.min) return a.min<b.min?-1:1;
+  if (a.pat!==b.pat) return a.pat<b.pat?-1:1;
+  if (a.pre.length===0 && b.pre.length===0) return 0;
+  if (a.pre.length===0) return 1;
+  if (b.pre.length===0) return -1;
+  const n = Math.max(a.pre.length, b.pre.length);
+  for (let i=0;i<n;i++){
+    const x = a.pre[i], y = b.pre[i];
+    if (x===undefined) return -1;
+    if (y===undefined) return 1;
+    if (typeof x.n === "number" && typeof y.n === "number"){
+      if (x.n!==y.n) return x.n<y.n?-1:1;
+    } else if (typeof x.n === "number"){
+      return -1;
+    } else if (typeof y.n === "number"){
+      return 1;
+    } else {
+      if (x.s!==y.s) return x.s<y.s?-1:1;
+    }
+  }
+  return 0;
+}
+function matchRange(range, verStr){
+  if (!range) return true;            // 未声明适配 = 不参与过滤
+  const v = parseVer(verStr);
+  if (!v) return true;                // 用户版本无法解析 = 不过滤
+  const R = String(range).trim();
+  if (!R || R === "*") return true;
+  /* 真实 engines.dsh 里最常见的是 "a || b || c" 并集与 "^x.y.z"，
+     早先只按空格切，"||" 会被当成一个版本号比出 false，导致本来兼容的插件被隐藏。 */
+  return R.split("||").some((part)=>{
+    const toks = part.trim().split(/\s+/).filter(Boolean);
+    return toks.length === 0 || toks.every((t)=>testComparator(v, t));
+  });
+}
+function testComparator(v, tok){
+  const m = tok.match(/^(\^|~|>=|<=|>|<|=)?\s*(.+)$/);
+  if (!m) return true;                 // 认不出的写法一律放行，与"未声明不隐藏"同口径
+  const op = m[1] || "=";
+  const c = parseVer(m[2]);
+  if (!c) return true;
+  if (op === "^" || op === "~"){
+    if (cmpVer(v, c) < 0) return false;
+    const upper = op === "~"
+      ? {maj:c.maj, min:c.min+1, pat:0, pre:[]}
+      : (c.maj > 0 ? {maj:c.maj+1, min:0, pat:0, pre:[]}
+        : (c.min > 0 ? {maj:0, min:c.min+1, pat:0, pre:[]}
+          : {maj:0, min:0, pat:c.pat+1, pre:[]}));
+    return cmpVer(v, upper) < 0;
+  }
+  const r = cmpVer(v, c);
+  return op===">=" ? r>=0 : op==="<=" ? r<=0 : op===">" ? r>0 : op==="<" ? r<0 : r===0;
+}
+function hashStr(s){
+  let h = 0;
+  s = String(s||"");
+  for (let i=0;i<s.length;i++){ h = ((h<<5)-h + s.charCodeAt(i))|0; }
+  return h;
+}
+
+/* ---------- 双滚动条自检 ----------
+   宿主文档的 origin 是 dsh-app://app/，插件的客户端在那边用相对地址请求会被
+   接口守卫（要求回环 Host）挡掉，所以这个上报放在 iframe 里做：本页对
+   /dsh-store/api/* 的请求是通的。iframe 与宿主同源，能直接量到宿主到底要不要
+   滚 —— 那才是「第二条滚动条」的判据。 */
+/* ---------- 宿主内可见窗口 ----------
+   iframe 被撑到内容高度、由宿主的内容列滚动，于是本页的「视口」其实是整篇文档。
+   浮层要罩住用户真正看得见的那一段，就得按宿主的滚动状态算：iframe 顶边到
+   滚动容器可见区顶边的距离 = --vis-top，可见高度 = --vis-h。
+   同源才能读，读不到就保持默认（整篇文档），退化成旧行为而不是报错。 */
+let _vpScrollEl = null, _vpLast = "";
+function syncViewport(){
+  if (!IN_FRAME) return;
+  const fe = window.frameElement;
+  if (!fe) return;
+  let p;
+  try { p = window.parent; } catch(e){ return }
+  let sc = _vpScrollEl;
+  if (!sc || !sc.isConnected) {
+    sc = fe.parentElement;
+    while (sc && sc !== p.document.body) {
+      const oy = p.getComputedStyle(sc).overflowY;
+      if (/(auto|scroll)/.test(oy) && sc.scrollHeight > sc.clientHeight + 2) break;
+      sc = sc.parentElement;
+    }
+    if (!sc || sc === p.document.body) sc = p.document.scrollingElement || p.document.body;
+    _vpScrollEl = sc;
+    try { sc.addEventListener("scroll", syncViewport, {passive:true}); } catch(e){}
+  }
+  const fr = fe.getBoundingClientRect();
+  const sr = sc.getBoundingClientRect();
+  const visTop = Math.max(0, sr.top - fr.top);
+  const visH = Math.max(120, Math.min(fr.height, sr.bottom - fr.top) - visTop);
+  const key = visTop + "x" + visH;
+  if (key === _vpLast) return;
+  _vpLast = key;
+  const rs = document.documentElement.style;
+  rs.setProperty("--vis-top", visTop + "px");
+  rs.setProperty("--vis-h", visH + "px");
+}
+
+function reportLayout(){
+  if (!IN_FRAME) return;
+  let p;
+  try { p = window.parent; } catch(e){ return }
+  let pd;
+  try { pd = p.document; } catch(e){ return }   // 跨源就读不到，放弃上报
+  const de = pd.documentElement;
+  // 从 iframe 一路向上走，把每一层的尺寸与 overflow 都记下来。
+  // 「两条滚动条」不一定是文档在滚：设置页内容列可能是中间某一层在滚，
+  // 只看 documentElement 会漏掉它 —— 上一版就是这么漏的。
+  const chain = [];
+  // 从「本页自己」的 frameElement 起步：p.frameElement 是父窗口在它的父级里的
+  // 嵌入元素，顶层窗口上恒为 null —— 上一版就是从这里起步，于是整条链是空的。
+  let el = window.frameElement;
+  let guard = 0;
+  while (el && guard++ < 12) {
+    let cs = null;
+    try { cs = p.getComputedStyle(el); } catch (e) { cs = null; }
+    chain.push({
+      tag: String(el.tagName).toLowerCase(),
+      cls: String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className || '').slice(0, 48),
+      ch: el.clientHeight, sh: el.scrollHeight,
+      cw: el.clientWidth, sw: el.scrollWidth,
+      oy: cs ? cs.overflowY : null,
+      ox: cs ? cs.overflowX : null,
+    });
+    el = el.parentElement;
+  }
+  const snap = {
+    selfH: window.innerHeight,
+    selfW: window.innerWidth,
+    selfScrollH: document.documentElement.scrollHeight,
+    parentH: p.innerHeight,
+    parentW: p.innerWidth,
+    parentScrollH: de.scrollHeight,
+    parentScrollW: de.scrollWidth,
+    hostScrolls: de.scrollHeight > p.innerHeight + 2,
+    visTop: document.documentElement.style.getPropertyValue("--vis-top"),
+    visH: document.documentElement.style.getPropertyValue("--vis-h"),
+    chain: chain,
+  };
+  apiFetch("api/layout", { method:"POST", headers:{"content-type":"application/json"},
+    body: JSON.stringify(snap) }).catch(()=>{});
+}
+
+async function load(){
+  const loading = document.getElementById("loading");
+  loading.style.display = "block";
+  try {
+    await probeHost();
+    const r = await fetch("data/plugins.json");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    DATA = await r.json();
+    const seven = DATA.plugins.filter(isNew).length;
+    document.getElementById("st-total").textContent = DATA.total;
+    document.getElementById("st-ok").textContent = DATA.installable;
+    document.getElementById("st-new").textContent = seven;
+    document.getElementById("st-upd").textContent = (DATA.updated||"").replace(/ \d+:\d+ UTC/,"");
+    refreshUpdBadge();
+    document.getElementById("btn-allupd").onclick = copyAllUpdates;
+    const base = location.pathname.replace(/[^/]*$/,"");
+    document.getElementById("idx-url").textContent = location.origin + base + "index.json";
+    if (HOST){
+      document.getElementById("idx-url").textContent = "宿主模式 · profile=" + esc(HOST.profile) + " · 数据经本插件代理（每日与线上同步）";
+      document.getElementById("cp-idx").style.display = "none";
+    }
+    loading.style.display = "none";
+    syncViewBtns(); buildTabbar(); render();
+    // 宿主包裹层的只收缩校正每 300ms 走一次，收敛后再报，免得报到一半
+    // 宿主内容列滚动时同步可见窗口；低频兜底以防滚动事件没挂上
+    syncViewport();
+    setInterval(syncViewport, 250);
+    setTimeout(reportLayout, 1200);
+    setTimeout(reportLayout, 3000);
+  } catch(e){
+    loading.innerHTML = "数据加载失败（" + esc(e.message) + "）<br><span style='font-size:12px'>请检查网络后刷新重试</span>";
+  }
+}
+function isNew(p){
+  const a = (p.added||"").slice(0,10);
+  if (!a) return false;
+  return (Date.now() - new Date(a+"T00:00:00").getTime()) < 7*864e5;
+}
+function sinceOk(p){
+  const a = (p.added||"").slice(0,10);
+  if (!a || state.since==="all") return true;
+  const days = {"1d":1,"7d":7,"30d":30,"90d":90,"1y":365}[state.since];
+  return (Date.now() - new Date(a+"T00:00:00").getTime()) < days*864e5;
+}
+function daysSince(d){
+  if (!d) return Infinity;
+  return (Date.now() - new Date(d.slice(0,10)+"T00:00:00").getTime()) / 864e5;
+}
+
+/* ---------- 标签页 ---------- */
+function refreshUpdBadge(){
+  if (!DATA) return;
+  document.getElementById("st-upd2").textContent = DATA.plugins.filter(updateAvailable).length;
+}
+function buildTabbar(){
+  refreshUpdBadge();
+  const el = document.getElementById("tabbar");
+  const tabs = [
+    ["discover","发现",""],
+    ["theme","主题",""],
+    ["fav","收藏",favs.size],
+    ["installed","已安装",installed.size],
+    ["blocked","已屏蔽",blocked.size],
+    ["submit","提交插件",""],
+    ["advanced","高级",""],
+  ];
+  el.innerHTML = tabs.map(([id,label,cnt])=>
+    `<button class="tab${state.tab===id?" active":""}" data-tab="${id}">${label}${cnt!==undefined&&cnt>0?`<span class="cnt">${cnt}</span>`:""}</button>`
+  ).join("");
+  el.querySelectorAll(".tab").forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
+}
+function setTab(t){
+  state.tab = t;
+  state.cat = "all";
+  buildTabbar(); render();
+}
+
+/* ---------- 筛选 ---------- */
+function isThemePlugin(p){
+  return p.cat==="interface" || (p.tags||[]).some(t=>/theme|appearance|skin|look/i.test(t));
+}
+function baseList(){
+  let list;
+  if (state.tab==="fav") list = DATA.plugins.filter(p=>favs.has(p.name));
+  else if (state.tab==="installed") list = DATA.plugins.filter(isInstalled).concat(installedExtras());
+  else if (state.tab==="blocked") list = DATA.plugins.filter(p=>blocked.has(p.name));
+  else {
+    list = DATA.plugins.filter(p=>!blocked.has(p.name));
+    if (state.tab==="theme") list = list.filter(isThemePlugin);
+  }
+  return list;
+}
+function compatOk(p){
+  if (!state.dshVer) return true;
+  return matchRange(p.dsh, state.dshVer);
+}
+function filtered(){
+  let list = baseList();
+  if (state.tab==="discover" || state.tab==="theme"){
+    if (state.cat!=="all") list = list.filter(p=>p.cat===state.cat);
+    if (state.src==="npm") list = list.filter(p=>p.source==="npm");
+    if (state.src==="git") list = list.filter(p=>p.source==="git");
+    if (state.since!=="all") list = list.filter(sinceOk);
+    for (const f of state.filters){
+      if (f==="inst") list = list.filter(p=>p.installable);
+      if (f==="off") list = list.filter(p=>p.official);
+      if (f==="new") list = list.filter(isNew);
+      if (f==="update") list = list.filter(p => HOST ? updateAvailable(p) : p.hasUpdate);
+      if (f==="fav") list = list.filter(p=>favs.has(p.name));
+      if (f==="installed") list = list.filter(isInstalled);
+    }
+    const beforeCompat = list.length;
+    list = list.filter(compatOk);
+    state._hiddenByCompat = beforeCompat - list.length;
+  }
+  const q = state.q.trim().toLowerCase();
+  if (q){
+    list = list.filter(p =>
+      (p.name||"").toLowerCase().includes(q) ||
+      (p.title||"").toLowerCase().includes(q) ||
+      (p.desc||"").toLowerCase().includes(q) ||
+      (p.descEn||"").toLowerCase().includes(q) ||
+      (p.tags||[]).some(t=>t.toLowerCase().includes(q)));
+  }
+  const s = state.sort, d = state.dir==="desc" ? 1 : -1;
+  list.sort((a,b)=>{
+    let v = 0;
+    if (s==="downloads") v = (b.downloads||0)-(a.downloads||0);
+    else if (s==="stars") v = (b.stars||0)-(a.stars||0);
+    else if (s==="added") v = (b.added||"").localeCompare(a.added||"");
+    else if (s==="updated") v = (b.updated||"").localeCompare(a.updated||"");
+    else if (s==="random") v = hashStr(a.name) - hashStr(b.name);
+    else v = (a.name||"").localeCompare(b.name||"");
+    return v * d;
+  });
+  return list;
+}
+
+/* ---------- 渲染 ---------- */
+function render(){
+  if (!DATA) return;
+  const isBrowse = state.tab==="discover" || state.tab==="theme";
+  document.getElementById("cats-zone").style.display = isBrowse ? "flex" : "none";
+  document.getElementById("toolbar").style.display = state.tab==="advanced"||state.tab==="submit" ? "none" : "flex";
+  document.getElementById("hscroll-zone").style.display = "none";
+  document.getElementById("submit-zone").style.display = "none";
+  document.getElementById("rows").style.display = "none";
+  document.getElementById("grid").style.display = "none";
+  document.getElementById("pager-top").innerHTML = "";
+  document.getElementById("pager-bottom").innerHTML = "";
+  document.getElementById("count-line").style.display = "none";
+  document.getElementById("note-line").style.display = "none";
+  document.getElementById("empty").style.display = "none";
+  document.getElementById("adv").style.display = "none";
+
+  if (state.tab==="advanced"){ renderAdvanced(); return; }
+  if (state.tab==="submit"){ renderSubmit(); renderDock(); return; }
+
+  if (isBrowse) renderCats();
+
+  // 发现页顶部横滑分区
+  if (state.tab==="discover" && !state.q && state.cat==="all" && state.src==="all" && state.since==="all" && state.filters.size===0 && !state.dshVer){
+    renderHScroll();
+  }
+
+  const list = filtered();
+  document.getElementById("empty").style.display = list.length ? "none" : "block";
+  document.getElementById("empty").innerHTML = "没有匹配的插件<br><span style='font-size:12px'>换个关键词或清除筛选试试</span>";
+  // 换筛选条件后停留在旧页码会看到一页空白，所以列表输入一变就回到第 1 页。
+  // 逐项改写每个入口太散，这里按输入签名判定。
+  const sig = JSON.stringify([state.tab, state.q, state.cat, state.sort, state.dir, state.since, state.src, [...state.filters], !!state.dshVer]);
+  if (sig !== lastListSig){ state.page = 1; lastListSig = sig; }
+  const pages = Math.max(1, Math.ceil(list.length / state.perPage));
+  if (state.page > pages) state.page = pages;
+  if (state.page < 1) state.page = 1;
+  draw(list);
+  renderPager(list.length, pages);
+  document.getElementById("count-line").style.display = "block";
+  let extra = "";
+  if (isBrowse && state.dshVer) extra = ` · 已按 DSH ${esc(state.dshVer)} 兼容过滤`;
+  const from = list.length ? (state.page - 1) * state.perPage + 1 : 0;
+  const to = Math.min(state.page * state.perPage, list.length);
+  document.getElementById("count-line").textContent = `第 ${from}–${to} 个 / 共 ${list.length} 个插件${extra}`;
+  if (state.tab==="theme"){
+    document.getElementById("note-line").style.display = "block";
+    document.getElementById("note-line").textContent = "主题页展示「界面增强」分类与 theme/appearance 标签的插件，共 " + list.length + " 个";
+  } else if (isBrowse && state.dshVer && (state._hiddenByCompat||0)>0){
+    document.getElementById("note-line").style.display = "block";
+    document.getElementById("note-line").textContent = "⚠️ 已按 DSH " + esc(state.dshVer) + " 兼容过滤，隐藏了 " + (state._hiddenByCompat||0) + " 个声明不兼容的插件（未声明宿主要求的插件仍显示，与 dsh-market 口径一致）";
+  }
+  renderDock();
+}
+function renderCats(){
+  const el = document.getElementById("cats-zone");
+  let html = `<button class="cat${state.cat==="all"?" active":""}" data-cat="all">全部 <span class="n">${baseList().length}</span></button>`;
+  for (const [k,c] of Object.entries(DATA.categories)){
+    html += `<button class="cat${state.cat===k?" active":""}" data-cat="${k}">${c.zh} <span class="n">${c.count}</span></button>`;
+  }
+  el.innerHTML = html;
+  el.querySelectorAll(".cat").forEach(b=>b.onclick=()=>{ state.cat=b.dataset.cat; renderCats(); render(); });
+}
+
+/* ---------- 头像/图标/徽标/pill ---------- */
+function avatarHtml(p, sm){
+  if (!p.avatar) return "";
+  return `<img class="avatar${sm?" sm":""}" src="${esc(p.avatar)}" alt="" loading="lazy" onerror="this.remove()">`;
+}
+function iconHtml(p, sm){
+  if (!p.icon) return "";
+  return `<img class="picon${sm?" sm":""}" src="${esc(p.icon)}" alt="" loading="lazy" onerror="this.remove()">`;
+}
+function updBadge(p){
+  /* 宿主模式按本机版本差出徽标；目录收录新不新对已经装好的人没意义 */
+  if (HOST) return updateAvailable(p)
+    ? `<span class="badge upd" title="本机 ${esc(normVer(installedSpecOf(p))||"未知")} → v${esc(updateTargetOf(p))}">🔄 可升级 v${esc(updateTargetOf(p))}</span>`
+    : "";
+  if (!p.hasUpdate) return "";
+  if (p.source==="git") return `<span class="badge upd" title="上游有新提交">🔄 有新提交</span>`;
+  if (p.latestVersion) return `<span class="badge upd" title="与本站收录相比有新版本">🔄 有新版本 v${esc(p.latestVersion)}</span>`;
+  return `<span class="badge upd">🔄 有新版本</span>`;
+}
+function badges(p){
+  let h = "";
+  if (p.source==="npm") h += `<span class="badge npm">npm</span>`;
+  else if (p.source==="git") h += `<span class="badge git">git</span>`;
+  if (p.official) h += `<span class="badge off">官方</span>`;
+  if (isNew(p)) h += `<span class="badge new">新增</span>`;
+  h += updBadge(p);
+  if (isInstalled(p)) h += `<span class="badge inst">已安装</span>`;
+  if (state.tab==="installed" && (HOST ? updateAvailable(p) : p.hasUpdate)) h += `<span class="badge upd2">可更新</span>`;
+  if (p.version) h += `<span class="badge ver">v${esc(p.version)}</span>`;
+  if (p.source==="npm" && p.downloads) h += `<span class="badge dl">↓ ${fmtN(p.downloads)}</span>`;
+  return h;
+}
+function pills(p){
+  let h = "";
+  if (isNew(p)) h += `<span class="pill new">🆕 近期收录</span>`;
+  const du = daysSince(p.updated);
+  if (du <= 7) h += `<span class="pill upt">◷ 7天内更新</span>`;
+  else if (du <= 30) h += `<span class="pill upt">◷ 30天内更新</span>`;
+  if (p.downloads >= 100000) h += `<span class="pill dl">↓100k+</span>`;
+  else if (p.downloads >= 10000) h += `<span class="pill dl">↓10k+</span>`;
+  else if (p.downloads >= 1000) h += `<span class="pill dl">↓1k+</span>`;
+  return h;
+}
+function opsHtml(p){
+  return `<div class="ops">
+    <button class="op${favs.has(p.name)?" on":""}" data-op="fav" data-n="${esc(p.name)}" title="收藏">♥</button>
+    <button class="op${isInstalled(p)?" on":""}" data-op="installed" data-n="${esc(p.name)}" title="标记已安装">✓</button>
+    <button class="op${queue.has(p.name)?" on":""}" data-op="queue" data-n="${esc(p.name)}" title="加入待安装清单">⤓</button>
+    <button class="op danger${blocked.has(p.name)?" on":""}" data-op="blocked" data-n="${esc(p.name)}" title="屏蔽">🚫</button>
+  </div>`;
+}
+/* ---------- 分页 ---------- */
+function pageWindow(cur, total){
+  // 首尾恒显，当前页左右各带一页，其余用 … 省略
+  const keep = new Set([1, total, cur, cur-1, cur+1]);
+  const out = [];
+  let prev = 0;
+  for (const n of [...keep].filter(x => x >= 1 && x <= total).sort((a,b)=>a-b)){
+    if (prev && n - prev > 1) out.push("…");
+    out.push(n);
+    prev = n;
+  }
+  return out;
+}
+function pagerHtml(pages){
+  if (pages <= 1) return "";
+  const cur = state.page;
+  const btns = pageWindow(cur, pages).map(x =>
+    x === "…" ? `<span class="pg-gap">…</span>`
+              : `<button class="pg-btn${x===cur?" on":""}" data-pg="${x}"${x===cur?" disabled":""}>${x}</button>`
+  ).join("");
+  const opts = PER_PAGE_CHOICES.map(n => `<option value="${n}"${n===state.perPage?" selected":""}>${n}</option>`).join("");
+  return `<button class="pg-btn" data-pg="prev"${cur<=1?" disabled":""}>‹ 上一页</button>${btns}`
+       + `<button class="pg-btn" data-pg="next"${cur>=pages?" disabled":""}>下一页 ›</button>`
+       + `<span class="pg-info">第 ${cur} / ${pages} 页</span>`
+       + `<span class="pg-size">每页 <select data-pg="size" title="每页显示多少个">${opts}</select></span>`;
+}
+function renderPager(total, pages){
+  const html = pagerHtml(pages);
+  for (const id of ["pager-top", "pager-bottom"]){
+    const el = document.getElementById(id);
+    el.innerHTML = html;
+    if (!html) continue;
+    el.querySelectorAll("[data-pg]").forEach(b => {
+      if (b.tagName === "SELECT") return;
+      b.onclick = () => {
+        const v = b.dataset.pg;
+        const next = v === "prev" ? state.page - 1 : v === "next" ? state.page + 1 : +v;
+        if (next === state.page || next < 1 || next > pages) return;
+        state.page = next;
+        render();
+        scrollTopOfList();
+      };
+    });
+    const sel = el.querySelector('select[data-pg="size"]');
+    if (sel) sel.onchange = () => {
+      const n = +sel.value;
+      if (!PER_PAGE_CHOICES.includes(n)) return;
+      // 换每页条数时尽量停在正在看的条目附近，否则一律被弹回第 1 页
+      const firstVisible = (state.page - 1) * state.perPage;
+      state.perPage = n;
+      localStorage.setItem("dsh-perpage", String(n));
+      state.page = Math.min(pages, Math.floor(firstVisible / n) + 1) || 1;
+      render();
+      scrollTopOfList();
+    };
+  }
+}
+function scrollTopOfList(){
+  const anchor = document.getElementById("count-line");
+  const y = anchor ? anchor.getBoundingClientRect().top + window.scrollY - 64 : 0;
+  window.scrollTo({ top: Math.max(0, y), behavior: "auto" });
+}
+function draw(list){
+  const rowsEl = document.getElementById("rows");
+  const gridEl = document.getElementById("grid");
+  rowsEl.style.display = state.view==="row" ? "flex" : "none";  gridEl.style.display = state.view==="card" ? "grid" : "none";
+  let rh="", gh="";
+  // data-i 用的是全列表的绝对下标，点击处仍按 list[i] 取值，翻页不影响取数
+  const start = (state.page - 1) * state.perPage;
+  const end = Math.min(start + state.perPage, list.length);
+  for (let i=start;i<end;i++){
+    const p = list[i];
+    const instBtn = mainBtnHtml(p, i);
+    const desc = pickDesc(p) || "无描述";
+    const verLine = p.verified ? `<span class="vf">${esc(p.verified)}</span>` : "";
+    rh += `<div class="row" data-i="${i}">
+      <div class="row-main">
+        <div class="row-top">${iconHtml(p)}${avatarHtml(p)}<span class="pname">${esc(p.name)}</span>${badges(p)}<span class="cat-tag">${esc(catName(p.cat))}</span></div>
+        <div class="pdesc">${esc(desc)}</div>
+        <div class="row-pills">${pills(p)}</div>
+        <div class="row-tags">${(p.tags||[]).slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
+        <div class="row-meta"><span class="stars">${p.stars||0}</span><span class="upd">${esc((p.updated||"-").slice(0,10))}</span>${verLine}<span>${p.source==="npm"?"npm 安装":"GitHub 仓库"}</span></div>
+      </div>
+      <div class="row-side">${instBtn}${opsHtml(p)}</div>
+    </div>`;
+    gh += `<div class="card" data-i="${i}">
+      <div class="ctop">${iconHtml(p)}${avatarHtml(p)}<span class="pname">${esc(p.name)}</span><span class="badges">${badges(p)}</span></div>
+      <div class="pdesc">${esc(desc)}</div>
+      <div class="pills">${pills(p)}</div>
+      <div class="cmeta"><span class="stars">${p.stars||0}</span><span>${esc(catName(p.cat))}</span><span>${esc((p.updated||"-").slice(0,10))}</span>${p.verified?`<span class="vf">${esc(p.verified)}</span>`:""}</div>
+      ${mainBtnHtml(p, i)}
+      ${opsHtml(p)}
+    </div>`;
+  }
+  rowsEl.innerHTML = rh;
+  gridEl.innerHTML = gh;
+  rowsEl.querySelectorAll(".row").forEach(el=>el.onclick=e=>{
+    if (e.target.closest("button")) return;
+    openModalByPlugin(list[+el.dataset.i]);
+  });
+  gridEl.querySelectorAll(".card").forEach(el=>el.onclick=e=>{
+    if (e.target.closest("button")) return;
+    openModalByPlugin(list[+el.dataset.i]);
+  });
+  document.querySelectorAll(".install-btn:not(.pending)").forEach(b=>b.onclick=e=>{
+    e.stopPropagation();
+    const p = list[+b.dataset.inst];
+    if (!p) return;
+    const act = b.dataset.act || "install";
+    if (act==="unmark"){ installed.delete(p.name); save("dsh-installed", installed); toast("已取消标记"); buildTabbar(); render(); return; }
+    if (act==="uninstall"){ hostUninstall(p); return; }
+    if (act==="update"){ hostUpdateOne(p, b); return; }
+    if (HOST){ hostInstall(p, b); return; }
+    if (p.install) copyText(p.install, b, "✓ 已复制");
+  });
+  document.querySelectorAll(".op").forEach(b=>b.onclick=e=>{
+    e.stopPropagation();
+    const n = b.dataset.n, op = b.dataset.op;
+    if (op==="installed" && HOST){
+      const p = DATA.plugins.find(x=>x.name===n);
+      if (p ? isInstalled(p) : installed.has(n)) hostUninstall(p || {name:n});
+      else if (p) hostInstall(p, b);
+      else { installed.add(n); save("dsh-installed", installed); toast("已标记已安装"); buildTabbar(); render(); }
+      return;
+    }
+    const set = {fav:favs, installed:installed, blocked:blocked, queue:queue}[op];
+    const key = {"fav":"dsh-favs","installed":"dsh-installed","blocked":"dsh-blocked","queue":"dsh-queue"}[op];
+    if (set.has(n)){ set.delete(n); toast(op==="blocked"?"已取消屏蔽":op==="queue"?"已移出待装":"已取消"); }
+    else { set.add(n); toast(op==="fav"?"已收藏 ♥":op==="installed"?"已标记已安装":op==="blocked"?"已屏蔽，可在「已屏蔽」页恢复":"已加入待装清单 ⤓"); }
+    save(key, set);
+    buildTabbar();
+    if (op==="blocked") render(); else draw(filtered());
+    renderDock();
+  });
+}
+function catName(k){ const c = DATA.categories[k]; return c ? c.zh : (k || "目录外安装"); }
+function copyText(t, btn, okText){
+  navigator.clipboard.writeText(t).then(()=>{
+    if (btn){ const old = btn.textContent; btn.textContent = okText||"已复制"; btn.classList.add("copied");
+      setTimeout(()=>{btn.textContent=old; btn.classList.remove("copied");},1500); }
+  }).catch(()=>{ toast("复制失败，请手动复制"); });
+}
+
+/* ---------- 发现页横滑分区 ---------- */
+function renderHScroll(){
+  const zone = document.getElementById("hscroll-zone");
+  zone.style.display = "block";
+  const blockedSet = blocked;
+  const pool = DATA.plugins.filter(p=>!blockedSet.has(p.name));
+  const recent = [...pool].sort((a,b)=>(b.added||"").localeCompare(a.added||"")).slice(0,12);
+  const top = [...pool].sort((a,b)=>(b.downloads||0)-(a.downloads||0)).slice(0,12);
+  function hcard(p){
+    return `<div class="hcard" data-name="${esc(p.name)}">
+      <div class="hrow">${iconHtml(p,true)}${avatarHtml(p,true)}<span class="hnm">${esc(p.name)}</span></div>
+      <div class="hbd">${updBadge(p)}${p.source==="npm"?`<span class="badge npm">npm</span>`:`<span class="badge git">git</span>`}${p.downloads?`<span class="badge dl">↓${fmtN(p.downloads)}</span>`:""}${p.official?`<span class="badge off">官方</span>`:""}</div>
+    </div>`;
+  }
+  zone.innerHTML = `
+    <div class="hscroll-sec">
+      <h3>🕘 最近收录 <span class="sub">按收录时间倒序 · 前 12</span></h3>
+      <div class="hscroll">${recent.map(hcard).join("")}</div>
+    </div>
+    <div class="hscroll-sec">
+      <h3>🔥 最多安装 <span class="sub">近 30 天下载量倒序 · 前 12</span></h3>
+      <div class="hscroll">${top.map(hcard).join("")}</div>
+    </div>`;
+  zone.querySelectorAll(".hcard").forEach(el=>el.onclick=()=>{
+    const p = DATA.plugins.find(x=>x.name===el.dataset.name);
+    if (p) openModalByPlugin(p);
+  });
+}
+
+/* ---------- 详情 ---------- */
+function openModalByPlugin(p){
+  curPlugin = p;
+  modalTr = "";      // 上一个插件的机翻结果不能串进新弹窗
+  modalLang = "zh";  // 中文用户优先看中文
+  if (!p) return;
+  const avaEl = document.getElementById("m-ava");
+  if (p.icon){
+    avaEl.innerHTML = `<img src="${esc(p.icon)}" alt="" onerror="this.parentNode.innerHTML='${esc((p.name||"?").charAt(0).toUpperCase())}'">`;
+  } else {
+    avaEl.textContent = (p.name||"?").charAt(0).toUpperCase();
+  }
+  document.getElementById("m-title").textContent = modalLang==="zh" ? (p.title||p.name) : (p.titleEn||p.title||p.name);
+  document.getElementById("m-name").textContent = p.name;
+  // badges: 来源 / 官方 / 新增 / 更新 / 版本 / DSH 适配
+  let bd = badges(p);
+  bd += `<span class="badge git">${esc(catName(p.cat))}</span>`;
+  if (p.dsh) bd += `<span class="badge dsh" title="package.json engines.dsh">DSH ${esc(p.dsh)}</span>`;
+  else bd += `<span class="badge dshnone">未声明宿主要求</span>`;
+  document.getElementById("m-badges").innerHTML = bd;
+  // author
+  const au = document.getElementById("m-author");
+  if (p.author){
+    const av = p.avatar ? `<img class="avatar sm" src="${esc(p.avatar)}" alt="" onerror="this.remove()">` : "";
+    au.innerHTML = `${av}<span>作者：</span><a href="https://github.com/${esc(p.author)}" target="_blank" rel="noopener">@${esc(p.author)} ↗</a>`;
+  } else {
+    au.innerHTML = `<span style="color:var(--fg3)">作者：未知</span>`;
+  }
+  // meta
+  let meta = `
+    <div class="m-cell"><div class="k">Stars</div><div class="v">★ ${p.stars||0}</div></div>
+    <div class="m-cell"><div class="k">来源</div><div class="v">${p.source==="npm"?"npm":"GitHub"}</div></div>
+    <div class="m-cell"><div class="k">收录版本</div><div class="v">${esc(p.version||"-")}</div></div>
+    <div class="m-cell"><div class="k">下载量(近30天)</div><div class="v">${p.downloads?fmtN(p.downloads):"-"}</div></div>
+    <div class="m-cell"><div class="k">最近更新</div><div class="v">${esc((p.updated||"-").slice(0,10))}</div></div>
+    <div class="m-cell"><div class="k">收录时间</div><div class="v">${esc((p.added||"-").slice(0,10))}</div></div>
+    <div class="m-cell"><div class="k">已验证 DSH</div><div class="v">${esc(p.verified||"-")}</div></div>
+    <div class="m-cell"><div class="k">DSH 适配</div><div class="v" style="font-family:var(--mono);font-size:12px">${p.dsh?esc(p.dsh):"未声明"}</div></div>
+    <div class="m-cell"><div class="k">可安装</div><div class="v">${p.installable?"✓ 是":"✗ 待补"}</div></div>`;
+  if (p.latestVersion){
+    meta = `<div class="m-cell" style="grid-column:1/-1"><div class="k">最新版本${updateAvailable(p)?"（可升级）":""}</div><div class="v upd">${p.source==="git"?"commit ":"v"}${esc(p.latestVersion)}</div></div>` + meta;
+  }
+  if (HOST && isInstalled(p)){
+    const cur = normVer(installedSpecOf(p));
+    meta = `<div class="m-cell" style="grid-column:1/-1"><div class="k">本机已装</div><div class="v">${esc(cur||"未知（非 registry 安装）")}${updateAvailable(p)?` → <span class="upd">v${esc(updateTargetOf(p))}</span>`:""}</div></div>` + meta;
+  }
+  document.getElementById("m-meta").innerHTML = meta;
+  setDesc(p);
+  const inst = document.getElementById("m-install");
+  if (p.localOnly){
+    inst.innerHTML = `<div class="no-install">该插件不在商店目录中（其他渠道或本地链接安装）。本机已装，可直接卸载。<div style="margin-top:9px"><button class="install-btn danger" id="uninst">卸载</button></div></div>`;
+    document.getElementById("uninst").onclick = ()=>hostUninstall(p);
+  } else if (p.installable && p.install){
+    const on = isInstalled(p);
+    let btns;
+    if (!HOST) btns = `<button id="cp">复制</button>`;
+    else if (!on) btns = `<button id="act">安装</button>`;
+    else btns = (updateAvailable(p) ? `<button id="act" class="upd" title="升级到 v${esc(updateTargetOf(p))}">更新</button>` : "")
+              + `<button id="un" class="danger">卸载</button>`;
+    inst.innerHTML = `<div class="install-box"><code>${esc(p.install)}</code>${btns}</div>`;
+    const _cp = document.getElementById("cp"); if (_cp) _cp.onclick = e=>copyText(p.install, e.target, "已复制");
+    const _act = document.getElementById("act");
+    if (_act) _act.onclick = e=>{ if (!isInstalled(p)) hostInstall(p, e.target); else hostUpdateOne(p, e.target); };
+    const _un = document.getElementById("un"); if (_un) _un.onclick = ()=>hostUninstall(p);
+  } else {
+    inst.innerHTML = `<div class="no-install">该插件为 Git 来源，安装凭据（commit）正由每日增量管道补齐，补齐后即可一键安装。可先前往 GitHub 仓库查看。</div>`;
+  }
+  document.getElementById("m-links").innerHTML =
+    (p.repo ? `<a href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener">GitHub 仓库 ↗</a>
+       <a href="https://github.com/${esc(p.repo)}/stargazers" target="_blank" rel="noopener">Stargazers ↗</a>` : "") +
+    `<a href="https://github.com/qianyumeng0228/dsh-store/issues" target="_blank" rel="noopener">💬 讨论 / 反馈 ↗</a>`;
+  document.getElementById("m-tags").innerHTML = (p.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join("");
+  document.getElementById("mask").classList.add("show");
+}
+/* ---------- 描述中文化 ----------
+   desc 优先是中文（每日管道批量机翻）。这里兜两件事：
+   1) 中英切换只在「确实有两种语言」时出现 —— 过去 desc 与 descEn 一字不差
+      （16029 条里 15947 条相同），按钮切了个寂寞，用户以为坏了；
+   2) 存量/新增的纯英文条目给「译成中文」按钮，在线机翻并按原文缓存。
+   接口先 Google（本机经系统代理可达、返回 ACAO:*），失败退 MyMemory（直连可达）。 */
+const TR_CAP = 300;
+function trRead(src){ try { return JSON.parse(localStorage.getItem("dsh-tr")||"{}")[src] || ""; } catch(e){ return ""; } }
+function trWrite(src, zh){
+  try {
+    const m = JSON.parse(localStorage.getItem("dsh-tr")||"{}");
+    m[src] = zh;
+    const ks = Object.keys(m);
+    if (ks.length > TR_CAP) ks.slice(0, ks.length - TR_CAP).forEach(k=>delete m[k]);
+    localStorage.setItem("dsh-tr", JSON.stringify(m));
+  } catch(e){ /* 配额满只丢缓存，本次译文照样显示 */ }
+}
+function abortSig(){
+  try { return (typeof AbortSignal !== "undefined" && AbortSignal.timeout) ? AbortSignal.timeout(9000) : undefined; }
+  catch(e){ return undefined; }
+}
+async function gtxTranslate(src){
+  const r = await fetch("https://translate.googleapis.com/translate_a/single" +
+    "?client=gtx&sl=en&tl=zh-CN&dt=t&q=" + encodeURIComponent(src), { signal: abortSig() });
+  if (!r.ok) throw new Error("Google HTTP " + r.status);
+  const d = await r.json();
+  const zh = (d[0]||[]).map(s=>s&&s[0]).filter(Boolean).join("").trim();
+  if (!zh) throw new Error("Google 空译文");
+  return zh;
+}
+async function myMemoryTranslate(src){
+  const r = await fetch("https://api.mymemory.translated.net/get?q=" +
+    encodeURIComponent(src.slice(0,480)) + "&langpair=en|zh-CN", { signal: abortSig() });
+  if (!r.ok) throw new Error("MyMemory HTTP " + r.status);
+  const d = await r.json();
+  const zh = String((d && d.responseData && d.responseData.translatedText) || "").trim();
+  if (!zh) throw new Error("MyMemory 空译文");
+  return zh;
+}
+async function translateToZh(src){
+  const hit = trRead(src);
+  if (hit) return hit;
+  let zh;
+  try { zh = await gtxTranslate(src); }
+  catch(e){ zh = await myMemoryTranslate(src); }
+  trWrite(src, zh);
+  return zh;
+}
+function descPair(p){
+  const en = p.descEn || (hasCJK(p.desc) ? "" : (p.desc || ""));
+  const zh = zhDesc(p) || (curPlugin === p ? modalTr : "") || (en ? trRead(en) : "");
+  return { zh, en };
+}
+function setDesc(p){
+  const pair = descPair(p);
+  const d = document.getElementById("m-desc");
+  const sw = document.getElementById("lang-switch");
+  const tr = document.getElementById("l-tr");
+  d.textContent = (modalLang === "en" && pair.en) ? pair.en : (pair.zh || pair.en || "无描述");
+  const both = !!(pair.zh && pair.en && pair.zh !== pair.en);
+  sw.style.display = both ? "flex" : "none";
+  if (!pair.zh) modalLang = "en";
+  else modalLang = both ? modalLang : "zh";
+  document.getElementById("l-zh").classList.toggle("on", modalLang === "zh");
+  document.getElementById("l-en").classList.toggle("on", modalLang === "en");
+  tr.style.display = (!pair.zh && pair.en) ? "inline-block" : "none";
+  if (!pair.zh && pair.en) tr.textContent = "🌐 译成中文";
+}
+document.getElementById("l-zh").onclick = ()=>{ modalLang="zh"; if(curPlugin) setDesc(curPlugin); };
+document.getElementById("l-en").onclick = ()=>{ modalLang="en"; if(curPlugin) setDesc(curPlugin); };
+document.getElementById("l-tr").onclick = async (e)=>{
+  const p = curPlugin;
+  if (!p) return;
+  const en = descPair(p).en;
+  if (!en) return;
+  const btn = e.currentTarget;
+  btn.disabled = true; btn.textContent = "翻译中…";
+  try {
+    modalTr = await translateToZh(en);
+    modalLang = "zh";
+    setDesc(p);
+    toast("✓ 已机翻（机器翻译，仅供参考）");
+  } catch(err){
+    btn.disabled = false; btn.textContent = "🌐 译成中文";
+    toast("✗ 翻译失败：" + String((err && err.message) || err).slice(0, 60));
+  }
+};
+document.getElementById("close").onclick = ()=>document.getElementById("mask").classList.remove("show");
+document.getElementById("mask").onclick = e=>{ if(e.target===e.currentTarget) document.getElementById("mask").classList.remove("show"); };
+
+/* ---------- 待装栏 ---------- */
+function renderDock(){
+  document.getElementById("qcnt").textContent = queue.size;
+  const body = document.getElementById("dock-body");
+  if (queue.size){
+    const qlist = DATA.plugins.filter(p=>queue.has(p.name));
+    body.innerHTML = qlist.map(p=>`<div class="dq"><span class="nm">${esc(p.name)}</span><span class="cmd">${esc(p.install||"待补 commit")}</span><button class="rm" data-q="${esc(p.name)}" title="移除">✕</button></div>`).join("");
+    body.querySelectorAll(".rm").forEach(b=>b.onclick=e=>{
+      e.stopPropagation();
+      queue.delete(b.dataset.q); save("dsh-queue", queue); renderDock(); if(state.tab!=="submit"&&state.tab!=="advanced") draw(filtered());
+    });
+  } else body.innerHTML = `<div class="dq" style="color:var(--fg3)">清单为空：在插件上点 ⤓ 加入待装</div>`;
+}
+function toggleDock(){
+  document.getElementById("dock").classList.toggle("open");
+  renderDock();
+}
+function copyAllQueue(e){
+  e.stopPropagation();
+  const qlist = DATA.plugins.filter(p=>queue.has(p.name) && p.install);
+  if (!qlist.length){ toast("待装清单为空"); return; }
+  if (HOST){ hostInstallAll(qlist); return; }
+  const all = qlist.map(p=>p.install).join("\n");
+  navigator.clipboard.writeText(all).then(()=>toast("已复制 " + qlist.length + " 条安装命令 ✓")).catch(()=>toast("复制失败"));
+}
+function copyAllUpdates(){
+  const upd = DATA.plugins.filter(updateAvailable);
+  if (!upd.length){ toast("没有需要升级的插件（本机版本已不低于目录版本；本地链接安装的依赖不参与自动升级）"); return; }
+  if (HOST){ hostUpdateAll(upd); return; }
+  const cmds = upd.map(p=> p.source==="npm"
+    ? `dsh plugin add ${p.name}${updateTargetOf(p) ? "@" + updateTargetOf(p) : ""}`
+    : `dsh plugin add github:${p.repo}`);
+  const text = "# DSH 插件更新清单（共 " + upd.length + " 个：显式指定版本，避免 pnpm「Already up to date」空转）\n" + cmds.join("\n");
+  navigator.clipboard.writeText(text).then(()=>toast("已复制 " + upd.length + " 条更新命令 ✓")).catch(()=>toast("复制失败，请手动复制"));
+}
+
+/* ---------- 提交插件页 ---------- */
+function renderSubmit(){
+  const el = document.getElementById("submit-zone");
+  const catOpts = Object.entries(DATA.categories).map(([k,c])=>`<option value="${k}">${esc(c.zh)}</option>`).join("");
+  el.style.display = "block";
+  el.innerHTML = `
+    <h2>📥 提交插件收录</h2>
+    <div class="sub">本仓库为目录站，提交后由每日管道自动核验证据，通过即进入索引。下方表单会生成一条预填的 GitHub Issue。</div>
+    <div class="rules">
+      <h4>📋 收录规则</h4>
+      <ol>
+        <li><b>提交方式：</b>本仓库 GitHub Issue（用下方表单一键生成）。</li>
+        <li><b>收录条件：</b>仓库存在且 <code>package.json</code> 含 <code>dsh</code> 字段（管道自动校验证据），或已在 npm 发布且能被 dsh 识别；GitHub 仓库建议打 <code>topic:dsh-plugin</code>。</li>
+        <li><b>收录来源：</b>npm 包名（<code>dsh plugin add &lt;name&gt;</code>）或 <code>github:owner/repo</code>（<code>dsh plugin add github:&lt;owner/repo&gt;</code>）。</li>
+        <li><b>处理流程：</b>提交后由管道每日自动核验，通过即进入索引（状态 verified）；需人工判断的会挂起。</li>
+        <li><b>安全提示：</b>git 来源在 DSH 中安装可能需要 <code>allowBuilds</code>，建议锁定 commit；恶意、盗用或失效插件会被移除。</li>
+      </ol>
+    </div>
+    <div class="sform">
+      <div class="frow">
+        <label>插件名称（展示名）<span class="req">*</span></label>
+        <input type="text" id="sf-name" placeholder="如 My DSH Plugin">
+      </div>
+      <div class="frow">
+        <label>类型<span class="req">*</span></label>
+        <div class="radio-row">
+          <label><input type="radio" name="sf-type" value="npm" checked> npm 包</label>
+          <label><input type="radio" name="sf-type" value="git"> GitHub 仓库</label>
+        </div>
+      </div>
+      <div class="frow">
+        <label id="sf-id-label">npm 包名<span class="req">*</span></label>
+        <input type="text" id="sf-id" placeholder="如 @yourname/my-plugin">
+      </div>
+      <div class="frow">
+        <label>分类<span class="req">*</span></label>
+        <select id="sf-cat">${catOpts}</select>
+      </div>
+      <div class="frow">
+        <label>简介（选填）</label>
+        <textarea id="sf-desc" placeholder="一句话说明这个插件做什么"></textarea>
+      </div>
+      <div class="frow">
+        <label>补充说明（选填）</label>
+        <textarea id="sf-extra" placeholder="链接、截图、特殊要求等"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="sf-open">🚀 打开提交页</button>
+        <button class="btn" id="sf-copy">🔗 复制链接</button>
+      </div>
+    </div>`;
+  // 类型切换 label
+  el.querySelectorAll("input[name=sf-type]").forEach(r=>r.onchange=()=>{
+    document.getElementById("sf-id-label").innerHTML = r.value==="npm" ? "npm 包名<span class='req'>*</span>" : "owner/repo<span class='req'>*</span>";
+    document.getElementById("sf-id").placeholder = r.value==="npm" ? "如 @yourname/my-plugin" : "如 yourname/my-plugin";
+  });
+  document.getElementById("sf-open").onclick = ()=>{
+    const url = buildIssueUrl();
+    if (url) window.open(url, "_blank", "noopener");
+  };
+  document.getElementById("sf-copy").onclick = ()=>{
+    const url = buildIssueUrl();
+    if (url) copyText(url, document.getElementById("sf-copy"), "✓ 已复制");
+  };
+}
+function buildIssueUrl(){
+  const name = document.getElementById("sf-name").value.trim();
+  const type = document.querySelector("input[name=sf-type]:checked").value;
+  const ident = document.getElementById("sf-id").value.trim();
+  const cat = document.getElementById("sf-cat").value;
+  const desc = document.getElementById("sf-desc").value.trim();
+  const extra = document.getElementById("sf-extra").value.trim();
+  if (!name){ toast("请填写插件名称"); return null; }
+  if (!ident){ toast("请填写 npm 包名或 owner/repo"); return null; }
+  const body = [
+    "## 提交插件：" + name,
+    "",
+    "- 类型：" + (type==="npm" ? "npm 包" : "GitHub 仓库"),
+    "- " + (type==="npm" ? "npm 包名" : "owner/repo") + "：" + ident,
+    "- 分类：" + catName(cat),
+    desc ? "- 简介：" + desc : "",
+    extra ? "- 补充说明：" + extra : "",
+    "",
+    "### 证据说明",
+    "- 仓库存在且 `package.json` 含 `dsh` 字段（管道自动校验）；",
+    "- 或已在 npm 发布且能被 dsh 识别；",
+    "- GitHub 仓库建议打 topic:`dsh-plugin`。",
+    "",
+    "提交后由管道每日自动核验，通过即进入索引（verified）；需人工判断的会挂起。"
+  ].filter(Boolean).join("\n");
+  return "https://github.com/qianyumeng0228/dsh-store/issues/new?title=" + encodeURIComponent("[提交插件] " + name) + "&body=" + encodeURIComponent(body);
+}
+
+/* ---------- 高级页 ---------- */
+function renderAdvanced(){
+  document.getElementById("rows").style.display = "none";
+  document.getElementById("grid").style.display = "none";
+  document.getElementById("pager-top").innerHTML = "";
+  document.getElementById("pager-bottom").innerHTML = "";
+  document.getElementById("count-line").style.display = "none";
+  document.getElementById("note-line").style.display = "none";
+  document.getElementById("empty").style.display = "none";
+  document.getElementById("adv").style.display = "grid";
+  const idxUrl = document.getElementById("idx-url").textContent;
+  document.getElementById("adv").innerHTML = `
+    <div class="acard">
+      <h4>📌 索引源状态</h4>
+      <div class="kv"><span>地址</span><b style="font-size:11px;font-family:var(--mono)">${esc(idxUrl)}</b></div>
+      <div class="kv"><span>检查结果</span><b id="diag-idx">未检查</b></div>
+      <div class="kv"><span>数据文件</span><b id="diag-data">${esc(DATA.updated||"-")} · ${DATA.total} 条</b></div>
+      <div class="act"><button class="btn" id="btn-diag">🩺 运行诊断</button></div>
+      <div class="desc">诊断会检查索引源与数据文件的连通性和完整性。</div>
+    </div>
+    <div class="acard">
+      <h4>💾 备份与恢复</h4>
+      <div class="kv"><span>收藏</span><b>${favs.size}</b></div>
+      <div class="kv"><span>已安装标记</span><b>${installed.size}</b></div>
+      <div class="kv"><span>屏蔽</span><b>${blocked.size}</b></div>
+      <div class="kv"><span>待装清单</span><b>${queue.size}</b></div>
+      <div class="kv"><span>我的 DSH 版本（兼容过滤）</span><b>${esc(state.dshVer)||"未设置"}</b></div>
+      ${HOST?`<div class="kv"><span>宿主 profile</span><b style="color:var(--ok)">${esc(HOST.profile)} · 真实已装 ${installed.size} 个</b></div>`:""}
+      <div class="act">
+        <button class="btn" id="btn-export">${HOST?"⬇ 导出 DSH 配置备份":"⬇ 导出备份 JSON"}</button>
+        <button class="btn" id="btn-import" ${HOST?'style="display:none"':""}>⬆ 导入备份</button>
+        <input type="file" id="import-file" accept=".json" style="display:none">
+      </div>
+      <div class="desc">${HOST?"导出本机 DSH profile 的已装插件清单与 cordis 补丁配置（JSON），可用于迁移/恢复。":"导出收藏/已装/屏蔽/待装配置，换浏览器或重装后可导入恢复。"}</div>
+    </div>
+    <div class="acard">
+      <h4>ℹ 关于</h4>
+      <div class="kv"><span>索引格式</span><b>format-1</b></div>
+      <div class="kv"><span>数据来源</span><b>dsh.works 种子 + topic 扫描</b></div>
+      <div class="kv"><span>判定标准</span><b>package.json 的 dsh 字段</b></div>
+      <div class="kv"><span>构建时间</span><b>${esc(DATA.updated||"-")}</b></div>
+      <div class="desc">
+        ${HOST
+          ? `当前为<b>宿主模式</b>（dsh-store-market 插件，profile=${esc(HOST.profile)}）：<br>
+             · 安装/卸载/更新通过 <code>dsh plugin</code> 真实执行；「已安装」页读取本机真实状态；<br>
+             · 「备份」导出本机 DSH profile 配置；「诊断」检查 dsh CLI / profile / 数据源连通性。<br>`
+          : `本站是<b>目录站</b>，无法读取你本机 DSH 的安装状态。<br>`}
+        · 「🔄 有新版本」= 与本站上次收录相比有新版/新提交发布，最近 7 天内管道会自动追平；<br>
+        · 静态站用「手动标记已装 + 待装清单 + 复制安装命令」替代；安装 <code>dsh-store-market</code> 插件后在 DSH 设置页进入商店即可获得真实一键安装/全部更新/备份/诊断；<br>
+        · git 来源在 DSH 中安装可能需要 allowBuilds，建议锁定 commit。
+      </div>
+    </div>
+    <div class="acard">
+      <h4>🧹 数据维护</h4>
+      <div class="kv"><span>已屏蔽插件</span><b>${blocked.size}</b></div>
+      <div class="act"><button class="btn" id="btn-clear-blocked">清空屏蔽</button><button class="btn" id="btn-reset">重置全部本地数据</button></div>
+      <div class="desc">清空屏蔽会恢复所有被隐藏的插件；重置会清空收藏/已装/屏蔽/待装/DSH 版本设置。</div>
+    </div>`;
+  document.getElementById("btn-diag").onclick = runDiag;
+  document.getElementById("btn-export").onclick = exportBackup;
+  document.getElementById("btn-import").onclick = ()=>document.getElementById("import-file").click();
+  document.getElementById("import-file").onchange = importBackup;
+  document.getElementById("btn-clear-blocked").onclick = ()=>{
+    if (confirm("确认清空全部屏蔽？")){ blocked.clear(); save("dsh-blocked", blocked); buildTabbar(); renderAdvanced(); toast("已清空屏蔽"); }
+  };
+  document.getElementById("btn-reset").onclick = ()=>{
+    if (confirm("确认重置全部本地数据（收藏/已装/屏蔽/待装/DSH 版本）？此操作不可恢复。")){
+      ["dsh-favs","dsh-installed","dsh-blocked","dsh-queue","dsh-dshver","dsh-view"].forEach(k=>localStorage.removeItem(k));
+      favs.clear(); installed.clear(); installedRepos.clear(); installedDetails = []; blocked.clear(); queue.clear();
+      state.dshVer = ""; state.view = IN_FRAME?"card":"row"; syncViewBtns();
+      buildTabbar(); renderAdvanced(); toast("已重置");
+    }
+  };
+}
+async function runDiag(){
+  const el = document.getElementById("diag-idx");
+  el.textContent = "检查中…";
+  if (HOST){
+    try {
+      const r = await apiFetch("api/diagnose");
+      const d = await r.json().catch(()=>({}));
+      if (d.dsh && d.dsh.ok){
+        el.innerHTML = `<span style="color:var(--ok)">✓ dsh ${esc((d.dsh.output||"").slice(0,30))}</span> · profile=${esc(d.profile)} · 已装 ${d.installedCount} 个 · 数据源 ${d.dataSource.reachable?"✓":"✗"} ${esc(d.dataSource.url||"")}`;
+      } else {
+        el.innerHTML = `<span style="color:var(--danger)">✗ dsh CLI 不可用：${esc((d.dsh&&d.dsh.output)||"检查失败")}</span>`;
+      }
+    } catch(e){ el.innerHTML = `<span style="color:var(--danger)">✗ ${esc(e.message)}</span>`; }
+    return;
+  }
+  const idxUrl = document.getElementById("idx-url").textContent;
+  try {
+    const r = await fetch(idxUrl, {method:"HEAD"});
+    const size = r.headers.get("Content-Length");
+    el.innerHTML = `<span style="color:var(--ok)">✓ HTTP ${r.status}</span>${size?` · ${(size/1048576).toFixed(1)}MB`:""}`;
+  } catch(e){
+    el.innerHTML = `<span style="color:var(--danger)">✗ ${esc(e.message)}</span>`;
+  }
+}
+function exportBackup(){
+  if (HOST){
+    // 备份走 apiFetch：导航式 <a href> 带不了自定义头，会被服务端守卫拒掉
+    apiFetch("api/backup").then(async (r)=>{
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "dsh-profile-" + HOST.profile + "-" + new Date().toISOString().slice(0,10) + ".json";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      toast("已导出 DSH 配置文件备份 ✓");
+    }).catch((e)=>toast("导出失败：" + e.message));
+    return;
+  }
+  const data = { app:"dsh-store", version:1, exported:new Date().toISOString(),
+    favs:[...favs], installed:[...installed], blocked:[...blocked], queue:[...queue],
+    dshVer: state.dshVer };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "dsh-store-backup-" + new Date().toISOString().slice(0,10) + ".json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("备份已导出 ✓");
+}
+function importBackup(e){
+  const f = e.target.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = ()=>{
+    try {
+      const d = JSON.parse(rd.result);
+      if (!d || d.app!=="dsh-store") throw new Error("不是本店备份文件");
+      favs = new Set(d.favs||[]); installed = new Set(d.installed||[]);
+      blocked = new Set(d.blocked||[]); queue = new Set(d.queue||[]);
+      if (d.dshVer !== undefined){ state.dshVer = d.dshVer||""; localStorage.setItem("dsh-dshver", state.dshVer); }
+      save("dsh-favs", favs); save("dsh-installed", installed);
+      save("dsh-blocked", blocked); save("dsh-queue", queue);
+      buildTabbar(); render(); toast("备份已导入 ✓");
+    } catch(err){ toast("导入失败：" + err.message); }
+    e.target.value = "";
+  };
+  rd.readAsText(f);
+}
+
+/* ---------- 控件 ---------- */
+document.getElementById("q").oninput = e=>{ state.q=e.target.value; render(); };
+document.getElementById("btn-filter").onclick = ()=>{ buildPanel(); openPanel(); };
+document.getElementById("panel-mask").onclick = closePanel;
+function openPanel(){ document.getElementById("panel-mask").classList.add("show"); document.getElementById("panel").classList.add("show"); }
+function closePanel(){ document.getElementById("panel-mask").classList.remove("show"); document.getElementById("panel").classList.remove("show"); }
+function buildPanel(){
+  const g = (id, items, key) => {
+    const el = document.getElementById(id);
+    el.innerHTML = items.map(([v,l])=>`<button class="popt${state[key]===v?" on":""}" data-v="${v}">${l}</button>`).join("");
+    el.querySelectorAll(".popt").forEach(b=>b.onclick=()=>{ state[key]=b.dataset.v; buildPanel(); render(); });
+  };
+  g("pg-sort", SORTS, "sort");
+  g("pg-dir", [["desc","降序"],["asc","升序"]], "dir");
+  g("pg-since", SINCES, "since");
+  g("pg-src", SRCS, "src");
+  const condEl = document.getElementById("pg-cond");
+  condEl.innerHTML = CONDS.map(([v,l])=>`<button class="popt${state.filters.has(v)?" on":""}" data-v="${v}">${l}</button>`).join("");
+  condEl.querySelectorAll(".popt").forEach(b=>b.onclick=()=>{
+    const v = b.dataset.v;
+    if (state.filters.has(v)) state.filters.delete(v); else state.filters.add(v);
+    syncQuickChips(); buildPanel(); render();
+  });
+  const dv = document.getElementById("pg-dshver");
+  dv.value = state.dshVer || "";
+  dv.oninput = ()=>{
+    state.dshVer = dv.value.trim();
+    if (state.dshVer) localStorage.setItem("dsh-dshver", state.dshVer);
+    else localStorage.removeItem("dsh-dshver");
+    render();
+  };
+}
+function syncQuickChips(){
+  document.querySelectorAll("#quick-filters .fchip").forEach(b=>{
+    b.classList.toggle("on", state.filters.has(b.dataset.f));
+  });
+}
+document.querySelectorAll("#quick-filters .fchip").forEach(b=>b.onclick=()=>{
+  const f = b.dataset.f;
+  if (state.filters.has(f)) state.filters.delete(f); else state.filters.add(f);
+  b.classList.toggle("on", state.filters.has(f));
+  render();
+});
+document.getElementById("v-row").onclick = ()=>setView("row");
+document.getElementById("v-card").onclick = ()=>setView("card");
+function syncViewBtns(){
+  document.getElementById("v-row").classList.toggle("on", state.view==="row");
+  document.getElementById("v-card").classList.toggle("on", state.view==="card");
+}
+function setView(v){
+  state.view = v;
+  localStorage.setItem("dsh-view", v);
+  syncViewBtns();
+  draw(filtered());
+}
+document.getElementById("cp-idx").onclick = e=>{
+  copyText(document.getElementById("idx-url").textContent, e.target, "✓ 已复制");
+};
+document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closePanel(); document.getElementById("mask").classList.remove("show"); } });
+load();
