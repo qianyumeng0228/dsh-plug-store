@@ -54,6 +54,14 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.11）
+
+- [x] 找那一行的方式**不再押单一结构**。此前只认 `[role="dialog"] nav button`，而宿主设置页外壳并不在任何公开契约里，真实界面还带分组标题（个人 / 集成 / 记录与应用），说明渲染它的是另一个组件 —— 押错就整个功能静默失效，这正是 0.1.6~0.1.10 图标一直没出来的原因。现按七档选择器依次尝试（`[role=dialog] nav button` → `nav button` → `[class*="navCell"]` → `[class*="navItem"]` → `[class*="navRow"]` → `[role=dialog] nav [role=button]` → `button`）
+- [x] 标签比对改成**优先取行内最后一个 span**，并允许标签后只跟计数/括号（`插件商店 3` 仍算同一行）；整行文本相等作为兜底
+- [x] 行里根本没有 svg（回退符号是 `<i>`/`<img>`/背景图）时，**自己插一个店面 svg** 进去，卸载时连同标记一起移除
+- [x] 加了现场上报：任何一条路径没走通，客户端就把「七档选择器各命中几行、看到的行文本、行内 html 头部」POST 到 `/dsh-store/api/navicon`，`api/diagnose` 原样带出 `navIcon` 字段。下次再不对，我直接读这个接口就能看到真实 DOM，不用再猜
+- [x] 五种结构变体在浏览器里跑真实 bundle 全过：标准 button 行、行是 div.navCell、行文本带计数 `<em>3</em>`、行内无 svg（改插入）、完全没有我们的行（上报现场）；前三种都是 marked=1 且 svg 被改成 1.9 描边店面，且正常路径不上报
+
 ## 已验证（0.1.10）
 
 - [x] 设置页导航那行的图标换法重做。0.1.6 起用的是「隐藏宿主的 svg + 在行上加 `::before` 的 `mask-image`」，在真实宿主里没生效（截图里 插件商店 仍戴通用回退方块）。改成**直接改写那个回退 svg**：换 viewBox、描边设 `currentColor`、用 `createElementNS` 逐节点建 path（不走 innerHTML 解析）。宿主已经管好了尺寸与墨色，改写它等于自动继承，明暗主题都不用另写 CSS

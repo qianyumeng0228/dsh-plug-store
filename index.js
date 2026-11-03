@@ -25,6 +25,16 @@ function bundledDataDir() {
 
 import { fileURLToPath } from 'node:url'
 
+/**
+ * 客户端上报的「设置页导航图标」现场快照。
+ *
+ * 宿主的 navIcon(id) 是封闭映射，第三方 section 只能拿到通用回退符号；我们靠
+ * 改写那个回退 svg 来换上自己的图标。但图标到底出没出来，只有真实 DOM 说得清，
+ * 而这一层是渲染进程里的事，外面看不到。所以客户端每次扫描把「找到了几行、
+ * 每行文本是什么、有没有 svg、改写有没有成功」报回来，diagnose 原样带出。
+ */
+let navIconReport = null
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
@@ -382,7 +392,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.10',
+        version: '0.1.11',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -497,7 +507,30 @@ export function apply(ctx, config = {}) {
         status: home.status || null,
         note: home.ok ? 'store reachable' : String(home.error || 'unreachable'),
       }
+      checks.navIcon = navIconReport
       sendJson(res, 200, checks)
+    })
+
+    // 客户端上报设置页导航现场。只留最后一份，且限制体积，避免被当成存储用。
+    route('POST', '/dsh-store/api/navicon', async (req, res) => {
+      let body
+      try {
+        body = await readBody(req)
+      } catch (e) {
+        sendJson(res, 400, { error: 'bad json' })
+        return
+      }
+      const rows = Array.isArray(body && body.rows) ? body.rows.slice(0, 40) : []
+      navIconReport = {
+        at: new Date().toISOString(),
+        label: String((body && body.label) || '').slice(0, 60),
+        scopes: body && body.scopes && typeof body.scopes === 'object' ? body.scopes : null,
+        matched: !!(body && body.matched),
+        hasSvg: !!(body && body.hasSvg),
+        applied: !!(body && body.applied),
+        rows: rows.map((r) => String(r).slice(0, 40)),
+      }
+      sendJson(res, 200, { ok: true })
     })
 
     route('GET', '/dsh-store/api/backup', (req, res) => {

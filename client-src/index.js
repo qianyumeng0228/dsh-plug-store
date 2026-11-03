@@ -123,33 +123,67 @@ function StoreLogo({ size = 16 }) {
 
 const NAV_ICON_FLAG = 'data-dsh-store-nav-icon'
 
+// 宿主设置页那一行的元素类型不在任何公开契约里，而且不同宿主外壳会给不同
+// class（navCell / navItem / navRow）。只押 `nav button` 一种，猜错就整个
+// 功能静默失效 —— 这正是 0.1.6~0.1.10 在真实宿主里没生效的原因。
+const NAV_ROW_SELECTORS = [
+  '[role="dialog"] nav button',
+  'nav button',
+  '[class*="navCell"]',
+  '[class*="navItem"]',
+  '[class*="navRow"]',
+  '[role="dialog"] nav [role="button"]',
+  'button',
+]
+
 function normalizeText(s) {
   return String(s == null ? '' : s).replace(/\s+/g, ' ').trim()
 }
 
-/**
- * Find our own row in the settings navigation.
- *
- * `settings.section` projects only `id` / `order` / `label`, so the shell paints
- * its own fallback glyph for every third-party section — that cube is not our
- * icon, it is the shell's. The only handle we have on "which row is ours" is the
- * visible label, so we claim the row by text.
- *
- * Three scopes instead of one because the desktop shell groups sections under
- * headings and the exact ancestor chain is not part of any published contract:
- * the documented `[role=dialog] nav button` first, then any `nav button`, then
- * any button whose text is our label. All three miss only if the label we resolve
- * disagrees with what is on screen.
- */
+/** 行里真正显示标签的那段文本：优先取最后一个 span，避开尾部的计数/徽标。 */
+function navRowLabel(el) {
+  const spans = el.querySelectorAll('span')
+  for (let i = spans.length - 1; i >= 0; i--) {
+    const t = normalizeText(spans[i].textContent)
+    if (t) return t
+  }
+  return normalizeText(el.textContent)
+}
+
+/** 标签后面只跟了计数/括号之类时，仍算同一行。 */
+function labelMatches(rowText, wanted) {
+  if (rowText === wanted) return true
+  if (!rowText.startsWith(wanted)) return false
+  return /^[\d\s()（）·|/.]*$/.test(rowText.slice(wanted.length))
+}
+
 function findOwnNavRow(label) {
   if (!label) return null
-  for (const sel of ['[role="dialog"] nav button', 'nav button', 'button']) {
-    const hit = Array.from(document.querySelectorAll(sel)).find(
-      (b) => normalizeText(b.textContent) === label,
-    )
-    if (hit) return hit
+  for (const sel of NAV_ROW_SELECTORS) {
+    let list
+    try {
+      list = document.querySelectorAll(sel)
+    } catch (e) {
+      continue
+    }
+    for (const el of list) {
+      if (labelMatches(navRowLabel(el), label)) return el
+      if (labelMatches(normalizeText(el.textContent), label)) return el
+    }
   }
   return null
+}
+
+/** 行里根本没有 svg 时（回退符号可能是 i/img/背景图），自己插一个进去。 */
+function buildStorefrontSvg(size) {
+  const NS = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(NS, 'svg')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.setAttribute('data-dsh-store-inserted', '1')
+  svg.style.flex = 'none'
+  paintStorefront(svg)
+  return svg
 }
 
 /** Draw the storefront into the shell's fallback svg, keeping its size and ink. */
@@ -190,6 +224,18 @@ function installSettingsNavIcon(ctx, resolveLabel) {
   ctx.effect(() => {
     let disposed = false
     let scheduled = false
+    let lastReport = ''
+    const report = (snapshot) => {
+      const json = JSON.stringify(snapshot)
+      if (json === lastReport) return
+      lastReport = json
+      // 只在「没走通」的上报：正常改写那条路径不调用这里。
+      fetch('/dsh-store/api/navicon', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-dsh-store': '1' },
+        body: json,
+      }).catch(() => {})
+    }
     const sync = () => {
       scheduled = false
       if (disposed) return
@@ -199,22 +245,54 @@ function installSettingsNavIcon(ctx, resolveLabel) {
       } catch (e) {
         wanted = ''
       }
+      const scopes = {}
+      for (const sel of NAV_ROW_SELECTORS) {
+        try {
+          scopes[sel] = document.querySelectorAll(sel).length
+        } catch (e) {
+          scopes[sel] = -1
+        }
+      }
       const row = wanted ? findOwnNavRow(wanted) : null
-      // 别的行可能带着上一次的标记（改名、语言切换），一并摘掉
+      // 上一轮被标记的行可能已经不属于我们了（改名、语言切换）
       for (const stale of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) {
-        if (stale !== row) {
-          stale.removeAttribute(NAV_ICON_FLAG)
+        if (stale === row) continue
+        stale.removeAttribute(NAV_ICON_FLAG)
+        const inserted = stale.querySelector('svg[data-dsh-store-inserted]')
+        if (inserted) stale.removeChild(inserted)
+        else {
           const svg = stale.querySelector('svg')
           if (svg) svg.removeAttribute('stroke-width')
         }
       }
-      if (!row) return
-      const svg = row.querySelector('svg')
-      if (!svg) return
-      if (row.getAttribute(NAV_ICON_FLAG) !== 'store') {
+      const svg = row ? row.querySelector('svg') : null
+      if (row && !svg) {
+        // 回退符号不是 svg：插我们自己的，同时上报现场
+        const inserted = buildStorefrontSvg(16)
+        row.insertBefore(inserted, row.firstChild)
         row.setAttribute(NAV_ICON_FLAG, 'store')
-        paintStorefront(svg)
+        report({ label: wanted, scopes, matched: true, hasSvg: false, inserted: true,
+          rowHtmlHead: String(row.innerHTML).slice(0, 160) })
+        return
       }
+      if (row && svg) {
+        if (row.getAttribute(NAV_ICON_FLAG) !== 'store') {
+          row.setAttribute(NAV_ICON_FLAG, 'store')
+          paintStorefront(svg)
+        }
+        return
+      }
+      // 一行都没找到：把看到的文本都带回去，才能判断是选择器不对还是标签不对
+      const texts = []
+      try {
+        for (const sel of NAV_ROW_SELECTORS) {
+          const list = document.querySelectorAll(sel)
+          if (!list.length) continue
+          for (const b of list) texts.push(navRowLabel(b) || normalizeText(b.textContent))
+          break
+        }
+      } catch (e) { /* ignore */ }
+      report({ label: wanted, scopes, matched: false, hasSvg: false, rows: texts.slice(0, 40) })
     }
     const schedule = () => {
       if (scheduled || disposed) return
@@ -231,7 +309,11 @@ function installSettingsNavIcon(ctx, resolveLabel) {
       disposed = true
       observer.disconnect()
       clearInterval(timer)
-      for (const row of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) row.removeAttribute(NAV_ICON_FLAG)
+      for (const row of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) {
+        row.removeAttribute(NAV_ICON_FLAG)
+        const inserted = row.querySelector('svg[data-dsh-store-inserted]')
+        if (inserted) row.removeChild(inserted)
+      }
     }
   }, 'dsh-store-market: settings nav icon')
 }
