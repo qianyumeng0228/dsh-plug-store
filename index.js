@@ -390,7 +390,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.16',
+        version: '0.1.17',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -529,6 +529,7 @@ export function apply(ctx, config = {}) {
             ch: num(c && c.ch), sh: num(c && c.sh),
             cw: num(c && c.cw), sw: num(c && c.sw),
             oy: String(c && c.oy || '').slice(0, 20),
+            ox: String(c && c.ox || '').slice(0, 20),
           }))
         : null
       layoutReport = {

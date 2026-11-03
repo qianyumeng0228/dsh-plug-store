@@ -22,85 +22,66 @@ export const inject = ['slots', 'locale']
 const NS = 'dsh-store-market'
 
 function StoreFrame() {
-  // iframe 是一个自己滚动的视口。不能把它撑到内容高度：iframe 内的
-  // `position: fixed` 按 iframe 视口解析，撑满整篇文档后详情弹层会落到
-  // 文档正中，用户点卡片只看到一层灰。
-  //
-  // 但高度也不能猜。`calc(100vh - 92px)` 比宿主设置页内容区高出一截，
-  // 宿主就自己滚一条、iframe 内部再滚一条 —— 双滚动条就是这么来的。
-  // 先给一个够用的初值，再"只允许收缩"地校正：包裹层底边超出窗口多少就减掉
-  // 多少，直到宿主文档不再需要滚为止。只收缩是为了杜绝
-  // 「变高→宿主滚动→top 变小→再变高」的失控回环；收敛后定时器就停掉。
-  const wrapRef = React.useRef(null)
-  const [px, setPx] = React.useState(0)
+  // iframe 撑到内容高度，滚动交给宿主设置页的内容列 —— 整页只有一条滚动条，
+  // 和 dshmarket 的内联渲染一致。此前改成「iframe 固定高度自己滚」是为了修弹层，
+  // 但那样宿主内容列和 iframe 各出一条滚动条，用户看到的就是两条。
+  // 弹层错位改由商店页自己解决：它按宿主滚动状态把浮层罩在可见窗口上
+  // （site/index.html 的 syncViewport），不再依赖 iframe 视口。
+  const frameRef = React.useRef(null)
   React.useEffect(() => {
-    const first = wrapRef.current
-    if (!first) return
-    const floor = 320
-    let disposed = false
-    let settled = false
-    let timer = null
-    let current = Math.max(floor, Math.round(window.innerHeight - first.getBoundingClientRect().top - 8))
-    setPx(current)
-
-    const snapshot = () => {
-      const node = wrapRef.current
-      if (!node) return null
-      const rect = node.getBoundingClientRect()
-      return {
-        wrapH: Math.round(rect.height),
-        wrapTop: Math.round(rect.top),
-        wrapBottom: Math.round(rect.bottom),
-        winH: window.innerHeight,
-        docScrollH: document.documentElement.scrollHeight,
-        hostScrolls: document.documentElement.scrollHeight > window.innerHeight + 2,
+    const sync = () => {
+      const f = frameRef.current
+      if (!f) return
+      try {
+        const doc = f.contentDocument
+        const h = Math.max(
+          doc.documentElement.scrollHeight,
+          doc.body ? doc.body.scrollHeight : 0
+        )
+        const cur = parseFloat(f.style.height || '')
+        if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) {
+          f.style.height = h + 'px'
+        }
+      } catch (e) {
+        /* cross-origin or not loaded yet */
       }
     }
-    // 这里不上报：宿主文档 origin 是 dsh-app://app/，相对请求会被接口守卫（要求
-    // 回环 Host）拒掉，静默失败。布局自检放在 iframe 内的商店页做，那边的
-    // /dsh-store/api/* 是通的，而且同源能直接量到宿主。
-    const tick = () => {
-      const node = wrapRef.current
-      if (!node || disposed) return
-      const overflow = Math.round(node.getBoundingClientRect().bottom - window.innerHeight)
-      if (overflow > 2) {
-        current = Math.max(floor, current - overflow)
-        setPx(current)
-      }
-      const snap = snapshot()
-      if (!snap) return
-      if (!snap.hostScrolls && overflow <= 2 && snap.wrapBottom <= snap.winH + 2) {
-        settled = true
-        clearInterval(timer)
-        timer = null
-      }
-    }
-    timer = setInterval(tick, 300)
-    const onResize = () => {
-      if (disposed) return
-      current = Math.max(floor, Math.round(window.innerHeight - (wrapRef.current ? wrapRef.current.getBoundingClientRect().top : 0) - 8))
-      setPx(current)
-      if (settled && !timer) { settled = false; timer = setInterval(tick, 300) }
-      tick()
-    }
-    window.addEventListener('resize', onResize)
-    return () => {
-      disposed = true
-      if (timer) clearInterval(timer)
-      window.removeEventListener('resize', onResize)
-    }
+    sync()
+    const timer = setInterval(sync, 500)
+    return () => clearInterval(timer)
   }, [])
-  const height = px ? px + 'px' : 'calc(100vh - 92px)'
+  const onLoad = () => {
+    const f = frameRef.current
+    if (!f) return
+    try {
+      const doc = f.contentDocument
+      const h = Math.max(
+        doc.documentElement.scrollHeight,
+        doc.body ? doc.body.scrollHeight : 0
+      )
+      if (h > 0) f.style.height = h + 'px'
+    } catch (e) {}
+  }
   return React.createElement(
     'div',
     {
-      ref: wrapRef,
-      style: { display: 'block', height: height, overflow: 'hidden', background: '#ffffff' },
+      style: {
+        display: 'block',
+        minHeight: 'calc(100vh - 92px)',
+        background: '#ffffff',
+      },
     },
     React.createElement('iframe', {
+      ref: frameRef,
       src: '/dsh-store/',
       title: 'DSH 插件商店',
-      style: { width: '100%', height: '100%', border: '0', display: 'block' },
+      onLoad,
+      style: {
+        width: '100%',
+        height: 'calc(100vh - 92px)',
+        border: '0',
+        display: 'block',
+      },
     }),
   )
 }

@@ -46,71 +46,42 @@ var __dshStoreClient = (() => {
   var inject = ["slots", "locale"];
   var NS = "dsh-store-market";
   function StoreFrame() {
-    // iframe 必须是一个固定高度、自己滚动的视口。撑到内容高度会让 iframe 视口
-    // 等于整篇文档，页内 position:fixed 的详情弹层就落到文档正中。
-    //
-    // 高度也不能猜：calc(100vh - 92px) 比宿主设置页内容区高，宿主就自己滚一条、
-    // iframe 内部再滚一条，这就是双滚动条。先给够，再「只允许收缩」地校正 ——
-    // 只收缩是为了杜绝「变高→宿主滚动→top 变小→再变高」的失控回环。
-    const wrapRef = import_react.default.useRef(null);
-    const [px, setPx] = import_react.default.useState(0);
+    const frameRef = import_react.default.useRef(null);
     import_react.default.useEffect(() => {
-      const first = wrapRef.current;
-      if (!first) return;
-      const floor = 320;
-      let disposed = false;
-      let settled = false;
-      let timer = null;
-      let current = Math.max(floor, Math.round(window.innerHeight - first.getBoundingClientRect().top - 8));
-      setPx(current);
-      const settledCheck = () => {
-        const node = wrapRef.current;
-        if (!node) return false;
-        const rect = node.getBoundingClientRect();
-        const scrollH = document.documentElement.scrollHeight;
-        return scrollH <= window.innerHeight + 2 && rect.bottom <= window.innerHeight + 2;
-      };
-      const tick = () => {
-        const node = wrapRef.current;
-        if (!node || disposed) return;
-        const overflow = Math.round(node.getBoundingClientRect().bottom - window.innerHeight);
-        if (overflow > 2) {
-          current = Math.max(floor, current - overflow);
-          setPx(current);
-        }
-        if (settledCheck()) {
-          settled = true;
-          clearInterval(timer);
-          timer = null;
+      const sync = () => {
+        const f = frameRef.current;
+        if (!f) return;
+        try {
+          const doc = f.contentDocument;
+          const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
+          const cur = parseFloat(f.style.height || "");
+          if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) f.style.height = h + "px";
+        } catch (e) {
         }
       };
-      timer = setInterval(tick, 300);
-      const onResize = () => {
-        if (disposed) return;
-        const n2 = wrapRef.current;
-        current = Math.max(floor, Math.round(window.innerHeight - (n2 ? n2.getBoundingClientRect().top : 0) - 8));
-        setPx(current);
-        if (settled && !timer) {
-          settled = false;
-          timer = setInterval(tick, 300);
-        }
-        tick();
-      };
-      window.addEventListener("resize", onResize);
-      return () => {
-        disposed = true;
-        if (timer) clearInterval(timer);
-        window.removeEventListener("resize", onResize);
-      };
+      sync();
+      const timer = setInterval(sync, 500);
+      return () => clearInterval(timer);
     }, []);
-    const height = px ? px + "px" : "calc(100vh - 92px)";
+    const onLoad = () => {
+      const f = frameRef.current;
+      if (!f) return;
+      try {
+        const doc = f.contentDocument;
+        const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
+        if (h > 0) f.style.height = h + "px";
+      } catch (e) {
+      }
+    };
     return import_react.default.createElement(
       "div",
-      { ref: wrapRef, style: { display: "block", height, overflow: "hidden", background: "#ffffff" } },
+      { style: { display: "block", minHeight: "calc(100vh - 92px)", background: "#ffffff" } },
       import_react.default.createElement("iframe", {
+        ref: frameRef,
         src: "/dsh-store/",
         title: "DSH \u63D2\u4EF6\u5546\u5E97",
-        style: { width: "100%", height: "100%", border: "0", display: "block" }
+        onLoad,
+        style: { width: "100%", height: "calc(100vh - 92px)", border: "0", display: "block" }
       })
     );
   }

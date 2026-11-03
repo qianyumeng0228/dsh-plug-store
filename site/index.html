@@ -700,7 +700,9 @@ function reportLayout(){
   // 「两条滚动条」不一定是文档在滚：设置页内容列可能是中间某一层在滚，
   // 只看 documentElement 会漏掉它 —— 上一版就是这么漏的。
   const chain = [];
-  let el = p.frameElement;
+  // 从「本页自己」的 frameElement 起步：p.frameElement 是父窗口在它的父级里的
+  // 嵌入元素，顶层窗口上恒为 null —— 上一版就是从这里起步，于是整条链是空的。
+  let el = window.frameElement;
   let guard = 0;
   while (el && guard++ < 12) {
     let cs = null;
@@ -711,6 +713,7 @@ function reportLayout(){
       ch: el.clientHeight, sh: el.scrollHeight,
       cw: el.clientWidth, sw: el.scrollWidth,
       oy: cs ? cs.overflowY : null,
+      ox: cs ? cs.overflowX : null,
     });
     el = el.parentElement;
   }
