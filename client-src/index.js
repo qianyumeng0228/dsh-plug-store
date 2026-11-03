@@ -20,7 +20,6 @@ export const name = 'dsh-store-market'
 export const inject = ['slots', 'locale']
 
 const NS = 'dsh-store-market'
-const SIDEBAR_PANEL_ID = 'dsh-store-market'
 
 function StoreFrame() {
   // iframe 是一个自己滚动的视口。不能把它撑到内容高度：iframe 内的
@@ -41,7 +40,6 @@ function StoreFrame() {
     let disposed = false
     let settled = false
     let timer = null
-    let lastLayout = ''
     let current = Math.max(floor, Math.round(window.innerHeight - first.getBoundingClientRect().top - 8))
     setPx(current)
 
@@ -58,16 +56,9 @@ function StoreFrame() {
         hostScrolls: document.documentElement.scrollHeight > window.innerHeight + 2,
       }
     }
-    const report = (snap) => {
-      const json = JSON.stringify(snap)
-      if (json === lastLayout) return
-      lastLayout = json
-      fetch('/dsh-store/api/layout', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-dsh-store': '1' },
-        body: json,
-      }).catch(() => {})
-    }
+    // 这里不上报：宿主文档 origin 是 dsh-app://app/，相对请求会被接口守卫（要求
+    // 回环 Host）拒掉，静默失败。布局自检放在 iframe 内的商店页做，那边的
+    // /dsh-store/api/* 是通的，而且同源能直接量到宿主。
     const tick = () => {
       const node = wrapRef.current
       if (!node || disposed) return
@@ -78,8 +69,6 @@ function StoreFrame() {
       }
       const snap = snapshot()
       if (!snap) return
-      report(snap)
-      // 宿主不再需要滚、且我们确实占到了窗口底，就算收敛
       if (!snap.hostScrolls && overflow <= 2 && snap.wrapBottom <= snap.winH + 2) {
         settled = true
         clearInterval(timer)
@@ -113,48 +102,6 @@ function StoreFrame() {
       title: 'DSH 插件商店',
       style: { width: '100%', height: '100%', border: '0', display: 'block' },
     }),
-  )
-}
-
-// One storefront geometry, shared by the sidebar row and the settings-nav row so
-// the two can never drift apart. Outlined arched canopy with a striped hem over a
-// shop body and door — the same grammar as the 插件市场 row the user pointed at.
-// Stroke 1.9 on a 24 grid is the point where the walls stay solid ink at 18px and
-// the door still reads at 16px; translate(0 -0.25) puts the ink dead centre
-// (measured 0.00 / 0.00 at both 16px and 18px).
-const STORE_VB = '0 0 24 24'
-const STORE_SW = '1.9'
-const STORE_SHIFT = 'translate(0 -0.25)'
-const STORE_PATHS = [
-  'M3.2 9.2V7.1C3.2 5.3 4.6 4 6.3 4h11.4C19.4 4 20.8 5.3 20.8 7.1v2.1',
-  'M3.2 9.2h17.6',
-  'M8.8 4.2v5M15.2 4.2v5',
-  'M5.4 9.2v10.2a1.1 1.1 0 0 0 1.1 1.1h11a1.1 1.1 0 0 0 1.1-1.1V9.2',
-  'M9.6 20.5v-4.7a1.1 1.1 0 0 1 1.1-1.1h2.6a1.1 1.1 0 0 1 1.1 1.1v4.7',
-]
-
-// The host asks for 16px in the expanded sidebar and 18px when collapsed
-// (SidebarRoot passes `size: wide ? 16 : 18`), so the glyph must take the size.
-function StoreLogo({ size = 16 }) {
-  return React.createElement(
-    'svg',
-    {
-      width: size,
-      height: size,
-      viewBox: STORE_VB,
-      fill: 'none',
-      stroke: 'currentColor',
-      strokeWidth: STORE_SW,
-      strokeLinecap: 'round',
-      strokeLinejoin: 'round',
-      'aria-hidden': 'true',
-      style: { display: 'block' },
-    },
-    React.createElement(
-      'g',
-      { transform: STORE_SHIFT },
-      STORE_PATHS.map((d, i) => React.createElement('path', { key: i, d })),
-    ),
   )
 }
 
@@ -239,34 +186,6 @@ export function apply(ctx) {
     })
     ctx.slots.inject('settings.plugins.tab', () => tabGate.available())
 
-    // Left sidebar row + main panel (dshmarket-style entry).
-    //
-    // Visible by default: the gate below only ever *readies* the seat, and a row
-    // that needs an explicit setVisible(true) nobody calls meant this entry never
-    // existed at all — the store was reachable from the settings dialog only.
-    const sidebarGate = createSectionGate(() => {
-      const offPanel = ctx.slots.register({
-        name: 'main',
-        key: SIDEBAR_PANEL_ID,
-        locale: NS,
-        inject: () => ({ t }),
-      }, () => React.createElement('div', { style: { width: '100%', height: '100%', background: '#ffffff' } }, frame()))
-      const offRow = ctx.slots.register({
-        name: 'sidebar.panellist',
-        id: SIDEBAR_PANEL_ID,
-        order: 1,
-        label: () => t('nav'),
-        locale: NS,
-      }, (owner = {}) => React.createElement(StoreLogo, { size: owner.size ?? 16 }))
-      return () => {
-        if (typeof offRow === 'function') offRow()
-        if (typeof offPanel === 'function') offPanel()
-      }
-    }, true)
-    ctx.slots.inject('sidebar.panellist', () => sidebarGate.available())
-    // Fall back to visible once the sidebar is supported even if the gate's
-    // inject never fires on this host.
-    setTimeout(() => sidebarGate.available(), 1500)
   } catch (error) {
     console.error('[dsh-store-market] client mount failed; store missing this session', error)
   }

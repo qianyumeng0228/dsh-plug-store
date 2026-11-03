@@ -54,6 +54,13 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.15）
+
+- [x] **修掉一个已上线的致命错误**：`client/client.js` 是从 `client-src` 手工搬运的，而搬运时把 `React.useState` / `React.useEffect` / `React.createElement` 原样贴了进去 —— bundle 里 React 的引用名是 `import_react.default`，裸 `React` 是 undefined。于是 **StoreFrame 一挂载就抛**，商店面板整块空白。是我自己点开侧栏行发现空面板才定位到的，不是猜出来的
+- [x] **删掉主侧栏条目**（`sidebar.panellist` + 配套 `main` 面板）与只服务于它的店面字形。这条目是 0.1.6 基于对「侧边栏图标」的误读打开的，实测点开是空白面板；用户要的是设置页导航那一行。删干净：`StoreLogo` / `STORE_*` / `SIDEBAR_PANEL_ID` / `sidebarGate` 全部移除，stub 宿主复验剩 `settings.section` + `settings.plugins.tab` 两项、`apply threw: null`
+- [x] **布局自检换了发起方**。原先在宿主文档里 `fetch('/dsh-store/api/layout')`，但宿主文档 origin 是 `dsh-app://app/`，相对请求被接口守卫（要求回环 Host）拒掉，上报静默丢失 —— 我重启后轮询 40 秒一条都没收到，才发现这条路不通。改由 iframe 内的商店页上报：那边对 `/dsh-store/api/*` 的请求本来就是通的（宿主模式在用），且与宿主同源，能直接量 `parent.innerHeight` 与 `parent.document.scrollHeight`
+- [x] 判据固定为 `hostScrolls === false`：宿主文档自己不需要滚，就只剩 iframe 那一条滚动条
+
 ## 已验证（0.1.14）
 
 - [x] **删掉设置页导航图标改写整套代码**（`installSettingsNavIcon` / `describeNavRow` / `findRowByLabel` / `hide-before` 样式表）。用户叫停。它每 400ms~1.2s 往宿主 DOM 插节点、打属性、注样式，却一直没出结果，留着只有副作用没有收益

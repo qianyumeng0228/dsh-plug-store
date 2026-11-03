@@ -26,11 +26,10 @@ function bundledDataDir() {
 import { fileURLToPath } from 'node:url'
 
 /**
- * 客户端上报的布局现场：商店 iframe 包裹层实际占了多少、宿主文档自己要不要滚。
+ * 商店页上报的布局现场：iframe 实际多高、宿主文档要不要滚。
  *
- * 「右侧两条滚动条」的判据就在这儿——宿主文档一旦需要滚（hostScrolls），那条是
- * 宿主的，iframe 内部再有一条。外面看不到渲染进程的尺寸，只能让客户端报回来，
- * 否则每次改动都得靠人截图来回确认。
+ * 「右侧两条滚动条」的判据就是 hostScrolls：宿主一旦要滚，那条是宿主的，iframe
+ * 内部还有一条。这一层在渲染进程里，外面看不到，所以让商店页报回来。
  */
 let layoutReport = null
 
@@ -391,7 +390,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.14',
+        version: '0.1.15',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -510,7 +509,10 @@ export function apply(ctx, config = {}) {
       sendJson(res, 200, checks)
     })
 
-    // 客户端上报布局现场。只留最后一份，字段固定且限长，避免被当成存储用。
+    // 布局自检上报。发起方是 iframe 内的商店页而不是宿主文档：宿主文档的 origin
+    // 是 dsh-app://app/，在那边用相对地址请求会被接口守卫（要求回环 Host）拒掉，
+    // 上报会静默失败；商店页对 /dsh-store/api/* 的请求是通的，而且与宿主同源，
+    // 能直接量到宿主要不要滚 —— 那才是「第二条滚动条」的判据。
     route('POST', '/dsh-store/api/layout', async (req, res) => {
       let body
       try {
@@ -522,11 +524,9 @@ export function apply(ctx, config = {}) {
       const num = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v) : null)
       layoutReport = {
         at: new Date().toISOString(),
-        wrapH: num(body && body.wrapH),
-        wrapTop: num(body && body.wrapTop),
-        wrapBottom: num(body && body.wrapBottom),
-        winH: num(body && body.winH),
-        docScrollH: num(body && body.docScrollH),
+        iframeH: num(body && body.selfH),
+        parentH: num(body && body.parentH),
+        parentScrollH: num(body && body.parentScrollH),
         hostScrolls: !!(body && body.hostScrolls),
       }
       sendJson(res, 200, { ok: true })
