@@ -79,23 +79,35 @@ function StoreFrame() {
   )
 }
 
+// One storefront geometry, shared by the sidebar row and the settings-nav row so
+// the two can never drift apart. Outlined arched canopy with a striped hem over a
+// shop body and door — the same grammar as the 插件市场 row the user pointed at.
+// Stroke 1.9 on a 24 grid is the point where the walls stay solid ink at 18px and
+// the door still reads at 16px; translate(0 -0.25) puts the ink dead centre
+// (measured 0.00 / 0.00 at both 16px and 18px).
+const STORE_VB = '0 0 24 24'
+const STORE_SW = '1.9'
+const STORE_SHIFT = 'translate(0 -0.25)'
+const STORE_PATHS = [
+  'M3.2 9.2V7.1C3.2 5.3 4.6 4 6.3 4h11.4C19.4 4 20.8 5.3 20.8 7.1v2.1',
+  'M3.2 9.2h17.6',
+  'M8.8 4.2v5M15.2 4.2v5',
+  'M5.4 9.2v10.2a1.1 1.1 0 0 0 1.1 1.1h11a1.1 1.1 0 0 0 1.1-1.1V9.2',
+  'M9.6 20.5v-4.7a1.1 1.1 0 0 1 1.1-1.1h2.6a1.1 1.1 0 0 1 1.1 1.1v4.7',
+]
+
 // The host asks for 16px in the expanded sidebar and 18px when collapsed
 // (SidebarRoot passes `size: wide ? 16 : 18`), so the glyph must take the size.
 function StoreLogo({ size = 16 }) {
-  // Storefront: solid awning + walls + door. The neighbour row (插件市场) is an
-  // outlined awning with stripes, so a filled canopy keeps the two rows
-  // distinguishable while both read as "shop". Stroke weight 2.2 on a 24 grid is
-  // the point where the walls stay solid ink at 18px without clogging the door
-  // at 16px.
   return React.createElement(
     'svg',
     {
       width: size,
       height: size,
-      viewBox: '0 0 24 24',
+      viewBox: STORE_VB,
       fill: 'none',
       stroke: 'currentColor',
-      strokeWidth: 2.2,
+      strokeWidth: STORE_SW,
       strokeLinecap: 'round',
       strokeLinejoin: 'round',
       'aria-hidden': 'true',
@@ -103,84 +115,79 @@ function StoreLogo({ size = 16 }) {
     },
     React.createElement(
       'g',
-      { transform: 'translate(0 -0.7)' },
-      React.createElement('path', {
-        d: 'M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z',
-        fill: 'currentColor',
-        stroke: 'none',
-      }),
-      React.createElement('path', {
-        d: 'M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2',
-      }),
-      React.createElement('path', {
-        d: 'M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2',
-      }),
+      { transform: STORE_SHIFT },
+      STORE_PATHS.map((d, i) => React.createElement('path', { key: i, d })),
     ),
   )
 }
 
-/**
- * The storefront as a standalone SVG for a CSS `mask-image`.
- *
- * Painted pure black: a mask reads alpha only, and the visible colour comes from
- * the element's `background-color: currentColor`, so the glyph follows whatever
- * ink the shell gives a nav row — light and dark themes alike.
- */
-function storeMaskUrl() {
-  const svg =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
-    'stroke="#000" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
-    '<g transform="translate(0 -0.7)">' +
-    '<path d="M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z" fill="#000" stroke="none"/>' +
-    '<path d="M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2"/>' +
-    '<path d="M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2"/>' +
-    '</g>' +
-    '</svg>'
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+const NAV_ICON_FLAG = 'data-dsh-store-nav-icon'
+
+function normalizeText(s) {
+  return String(s == null ? '' : s).replace(/\s+/g, ' ').trim()
 }
 
-const NAV_ICON_MARKER = 'data-dsh-store-nav-icon'
-const NAV_ROW_SELECTOR = '[role="dialog"] nav button'
+/**
+ * Find our own row in the settings navigation.
+ *
+ * `settings.section` projects only `id` / `order` / `label`, so the shell paints
+ * its own fallback glyph for every third-party section — that cube is not our
+ * icon, it is the shell's. The only handle we have on "which row is ours" is the
+ * visible label, so we claim the row by text.
+ *
+ * Three scopes instead of one because the desktop shell groups sections under
+ * headings and the exact ancestor chain is not part of any published contract:
+ * the documented `[role=dialog] nav button` first, then any `nav button`, then
+ * any button whose text is our label. All three miss only if the label we resolve
+ * disagrees with what is on screen.
+ */
+function findOwnNavRow(label) {
+  if (!label) return null
+  for (const sel of ['[role="dialog"] nav button', 'nav button', 'button']) {
+    const hit = Array.from(document.querySelectorAll(sel)).find(
+      (b) => normalizeText(b.textContent) === label,
+    )
+    if (hit) return hit
+  }
+  return null
+}
+
+/** Draw the storefront into the shell's fallback svg, keeping its size and ink. */
+function paintStorefront(svg) {
+  const NS = 'http://www.w3.org/2000/svg'
+  svg.setAttribute('viewBox', STORE_VB)
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', STORE_SW)
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  while (svg.firstChild) svg.removeChild(svg.firstChild)
+  const g = document.createElementNS(NS, 'g')
+  g.setAttribute('transform', STORE_SHIFT)
+  for (const d of STORE_PATHS) {
+    const p = document.createElementNS(NS, 'path')
+    p.setAttribute('d', d)
+    g.appendChild(p)
+  }
+  svg.appendChild(g)
+}
 
 /**
  * Give our row in the settings navigation a storefront.
  *
- * `settings.section` projects only `id` / `order` / `label`, so a registrant has
- * no icon to pass and the shell paints its own fallback glyph for us — which is
- * why our row read as an anonymous box next to the market's. The row's glyph is a
- * direct child <svg>, so hide it and draw ours through ::before on a row we have
- * marked by its own visible label.
+ * Rewriting the fallback svg in place rather than hiding it and drawing a CSS
+ * `::before` mask: the mask route depends on the row being a flex box, on nothing
+ * else claiming `::before`, and on mask-image support — any one of those failing
+ * silently leaves the shell's glyph. The svg is already sized and coloured by the
+ * shell, so editing it inherits both, light and dark themes included.
  *
- * Narrow on purpose: only the row whose text equals our current label is marked;
- * the shell's structure is untouched; the marker and the stylesheet live inside a
- * `ctx.effect`, so they leave with the fiber; a locale switch re-claims the row
- * through the observer, so label and glyph never disagree.
+ * Scope stays narrow: only the row whose text equals our current label is
+ * touched, and the flag plus a re-check on every mutation keep a locale switch or
+ * a shell re-render from leaving the label and the glyph disagreeing.
  */
 function installSettingsNavIcon(ctx, resolveLabel) {
   if (typeof document === 'undefined') return
   ctx.effect(() => {
-    const tag = document.createElement('style')
-    tag.dataset.plugin = 'dsh-store-market'
-    tag.textContent = [
-      `[${NAV_ICON_MARKER}] > svg { display: none; }`,
-      `[${NAV_ICON_MARKER}]::before {`,
-      `  content: '';`,
-      `  flex: none;`,
-      `  width: 16px;`,
-      `  height: 16px;`,
-      `  background-color: currentColor;`,
-      `  -webkit-mask-image: url("${storeMaskUrl()}");`,
-      `  mask-image: url("${storeMaskUrl()}");`,
-      `  -webkit-mask-repeat: no-repeat;`,
-      `  mask-repeat: no-repeat;`,
-      `  -webkit-mask-position: center;`,
-      `  mask-position: center;`,
-      `  -webkit-mask-size: 16px 16px;`,
-      `  mask-size: 16px 16px;`,
-      `}`,
-    ].join('\n')
-    document.head.appendChild(tag)
-
     let disposed = false
     let scheduled = false
     const sync = () => {
@@ -188,18 +195,25 @@ function installSettingsNavIcon(ctx, resolveLabel) {
       if (disposed) return
       let wanted = ''
       try {
-        wanted = String(resolveLabel() ?? '').trim()
+        wanted = normalizeText(resolveLabel())
       } catch (e) {
         wanted = ''
       }
-      for (const row of document.querySelectorAll(NAV_ROW_SELECTOR)) {
-        // An empty label matches nothing: a locale that has not resolved yet must
-        // not mark the whole nav.
-        if (wanted.length > 0 && String(row.textContent ?? '').trim() === wanted) {
-          row.setAttribute(NAV_ICON_MARKER, '')
-        } else {
-          row.removeAttribute(NAV_ICON_MARKER)
+      const row = wanted ? findOwnNavRow(wanted) : null
+      // 别的行可能带着上一次的标记（改名、语言切换），一并摘掉
+      for (const stale of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) {
+        if (stale !== row) {
+          stale.removeAttribute(NAV_ICON_FLAG)
+          const svg = stale.querySelector('svg')
+          if (svg) svg.removeAttribute('stroke-width')
         }
+      }
+      if (!row) return
+      const svg = row.querySelector('svg')
+      if (!svg) return
+      if (row.getAttribute(NAV_ICON_FLAG) !== 'store') {
+        row.setAttribute(NAV_ICON_FLAG, 'store')
+        paintStorefront(svg)
       }
     }
     const schedule = () => {
@@ -210,11 +224,14 @@ function installSettingsNavIcon(ctx, resolveLabel) {
     sync()
     const observer = new MutationObserver(schedule)
     observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    // 兜底：对话框是懒挂载的，某些宿主不会为它改动 body 子树；低频重扫一次的成本
+    // 只是几次字符串比较。
+    const timer = setInterval(schedule, 1200)
     return () => {
       disposed = true
       observer.disconnect()
-      for (const row of document.querySelectorAll(`[${NAV_ICON_MARKER}]`)) row.removeAttribute(NAV_ICON_MARKER)
-      tag.remove()
+      clearInterval(timer)
+      for (const row of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) row.removeAttribute(NAV_ICON_FLAG)
     }
   }, 'dsh-store-market: settings nav icon')
 }

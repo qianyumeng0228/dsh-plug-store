@@ -54,6 +54,13 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.10）
+
+- [x] 设置页导航那行的图标换法重做。0.1.6 起用的是「隐藏宿主的 svg + 在行上加 `::before` 的 `mask-image`」，在真实宿主里没生效（截图里 插件商店 仍戴通用回退方块）。改成**直接改写那个回退 svg**：换 viewBox、描边设 `currentColor`、用 `createElementNS` 逐节点建 path（不走 innerHTML 解析）。宿主已经管好了尺寸与墨色，改写它等于自动继承，明暗主题都不用另写 CSS
+- [x] 找自己那一行从单一选择器放宽成三档：`[role="dialog"] nav button` → `nav button` → 任意文本等于本行标签的 `button`；文本比较改成把连续空白折叠后再比（分组外壳的标记里容易多插空白）。按宿主 asar 里的真实结构（`<div role=dialog><nav><div class=navList><button><svg/><span>`）搭了复现页，跑**真实 bundle**（假 `__ModuleLoader__` + 假 React）验证：只有 插件商店 那一行被认领，回退 svg 变成 5 条 path，栅格化出来是店面
+- [x] 补一个 1.2 秒低频重扫：对话框是懒挂载的，某些宿主不会为它改动 body 子树，只靠 MutationObserver 会漏；重扫成本只是几次字符串比较。语言切换或宿主重渲染后，上一轮被标记的行会被摘掉标记并重画
+- [x] **店面图形改成描边拱篷 + 分格篷底 + 屋身 + 门**，对齐 插件市场 那一行的语法（此前是实心遮阳篷）。同一份几何由 `STORE_PATHS` 单点定义，侧栏字形与设置页改写共用，不会各画一份。24 网格上描边 1.9、垂直校正 `translate(0 -0.25)`，实测 16px 与 18px 墨迹居中偏差都是 **0.00 / 0.00**；页头徽标与 favicon 同步
+
 ## 已验证（0.1.9）
 
 - [x] **右侧两条滚动条收成一条**。0.1.8 把 iframe 改成固定视口高，但那个高度用的是 `calc(100vh - 92px)` —— `100vh` 在宿主文档里是**整个窗口**高，比设置对话框内容区高出一截，于是宿主内容区自己滚一条、iframe 内部再滚一条。现改为贴合父容器实际高度（`height:100%`），只在父链给不出可解析高度（`clientHeight` 塌了）时退回 vh；`ResizeObserver` 跟着容器尺寸重判。外层 `overflow` 由 `auto` 改回 `hidden`，它自己不再产生滚动条

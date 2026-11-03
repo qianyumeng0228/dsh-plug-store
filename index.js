@@ -382,7 +382,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.9',
+        version: '0.1.10',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
