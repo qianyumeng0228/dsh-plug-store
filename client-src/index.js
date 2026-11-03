@@ -86,31 +86,138 @@ function StoreFrame() {
   )
 }
 
-function StoreLogo() {
-  // Shopping bag + "+" mark, single color (inherits currentColor) so it adapts to
-  // the host's light/dark sidebar. The plus is an even-odd hole in the bag body.
+// The host asks for 16px in the expanded sidebar and 18px when collapsed
+// (SidebarRoot passes `size: wide ? 16 : 18`), so the glyph must take the size.
+function StoreLogo({ size = 16 }) {
+  // Storefront: solid awning + walls + door. The neighbour row (插件市场) is an
+  // outlined awning with stripes, so a filled canopy keeps the two rows
+  // distinguishable while both read as "shop". Stroke weight 2.2 on a 24 grid is
+  // the point where the walls stay solid ink at 18px without clogging the door
+  // at 16px.
   return React.createElement(
     'svg',
     {
-      width: 16,
-      height: 16,
-      viewBox: '0 0 64 64',
+      width: size,
+      height: size,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 2.2,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
       'aria-hidden': 'true',
       style: { display: 'block' },
     },
     React.createElement('path', {
-      d: 'M27 26.5v-6a5 5 0 0 1 10 0v6',
-      fill: 'none',
-      stroke: 'currentColor',
-      strokeWidth: 4.4,
-      strokeLinecap: 'round',
+      d: 'M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z',
+      fill: 'currentColor',
+      stroke: 'none',
     }),
     React.createElement('path', {
-      fill: 'currentColor',
-      fillRule: 'evenodd',
-      d: 'M20.4 26H43.6a3.4 3.4 0 0 1 3.3 2.9L44.05 44.24A3.4 3.4 0 0 1 40.65 47.6H23.35a3.4 3.4 0 0 1-3.3-3.36L17.1 28.9A3.4 3.4 0 0 1 20.4 26zM29.45 32.85h5.1v4.1h4.1v5.1h-4.1v4.1h-5.1v-4.1h-4.1v-5.1h4.1z',
+      d: 'M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2',
+    }),
+    React.createElement('path', {
+      d: 'M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2',
     }),
   )
+}
+
+/**
+ * The storefront as a standalone SVG for a CSS `mask-image`.
+ *
+ * Painted pure black: a mask reads alpha only, and the visible colour comes from
+ * the element's `background-color: currentColor`, so the glyph follows whatever
+ * ink the shell gives a nav row — light and dark themes alike.
+ */
+function storeMaskUrl() {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="#000" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z" fill="#000" stroke="none"/>' +
+    '<path d="M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2"/>' +
+    '<path d="M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2"/>' +
+    '</svg>'
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}
+
+const NAV_ICON_MARKER = 'data-dsh-store-nav-icon'
+const NAV_ROW_SELECTOR = '[role="dialog"] nav button'
+
+/**
+ * Give our row in the settings navigation a storefront.
+ *
+ * `settings.section` projects only `id` / `order` / `label`, so a registrant has
+ * no icon to pass and the shell paints its own fallback glyph for us — which is
+ * why our row read as an anonymous box next to the market's. The row's glyph is a
+ * direct child <svg>, so hide it and draw ours through ::before on a row we have
+ * marked by its own visible label.
+ *
+ * Narrow on purpose: only the row whose text equals our current label is marked;
+ * the shell's structure is untouched; the marker and the stylesheet live inside a
+ * `ctx.effect`, so they leave with the fiber; a locale switch re-claims the row
+ * through the observer, so label and glyph never disagree.
+ */
+function installSettingsNavIcon(ctx, resolveLabel) {
+  if (typeof document === 'undefined') return
+  ctx.effect(() => {
+    const tag = document.createElement('style')
+    tag.dataset.plugin = 'dsh-store-market'
+    tag.textContent = [
+      `[${NAV_ICON_MARKER}] > svg { display: none; }`,
+      `[${NAV_ICON_MARKER}]::before {`,
+      `  content: '';`,
+      `  flex: none;`,
+      `  width: 16px;`,
+      `  height: 16px;`,
+      `  background-color: currentColor;`,
+      `  -webkit-mask-image: url("${storeMaskUrl()}");`,
+      `  mask-image: url("${storeMaskUrl()}");`,
+      `  -webkit-mask-repeat: no-repeat;`,
+      `  mask-repeat: no-repeat;`,
+      `  -webkit-mask-position: center;`,
+      `  mask-position: center;`,
+      `  -webkit-mask-size: 16px 16px;`,
+      `  mask-size: 16px 16px;`,
+      `}`,
+    ].join('\n')
+    document.head.appendChild(tag)
+
+    let disposed = false
+    let scheduled = false
+    const sync = () => {
+      scheduled = false
+      if (disposed) return
+      let wanted = ''
+      try {
+        wanted = String(resolveLabel() ?? '').trim()
+      } catch (e) {
+        wanted = ''
+      }
+      for (const row of document.querySelectorAll(NAV_ROW_SELECTOR)) {
+        // An empty label matches nothing: a locale that has not resolved yet must
+        // not mark the whole nav.
+        if (wanted.length > 0 && String(row.textContent ?? '').trim() === wanted) {
+          row.setAttribute(NAV_ICON_MARKER, '')
+        } else {
+          row.removeAttribute(NAV_ICON_MARKER)
+        }
+      }
+    }
+    const schedule = () => {
+      if (scheduled || disposed) return
+      scheduled = true
+      queueMicrotask(sync)
+    }
+    sync()
+    const observer = new MutationObserver(schedule)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    return () => {
+      disposed = true
+      observer.disconnect()
+      for (const row of document.querySelectorAll(`[${NAV_ICON_MARKER}]`)) row.removeAttribute(NAV_ICON_MARKER)
+      tag.remove()
+    }
+  }, 'dsh-store-market: settings nav icon')
 }
 
 /**
@@ -164,6 +271,8 @@ export function apply(ctx) {
     }), 'dsh-store-market: dictionaries')
     const t = ctx.locale.bind(NS)
 
+    installSettingsNavIcon(ctx, () => t('nav'))
+
     const frame = () => React.createElement(StoreFrame)
 
     // Settings dialog sidebar entry.
@@ -195,6 +304,10 @@ export function apply(ctx) {
     ctx.slots.inject('settings.plugins.tab', () => tabGate.available())
 
     // Left sidebar row + main panel (dshmarket-style entry).
+    //
+    // Visible by default: the gate below only ever *readies* the seat, and a row
+    // that needs an explicit setVisible(true) nobody calls meant this entry never
+    // existed at all — the store was reachable from the settings dialog only.
     const sidebarGate = createSectionGate(() => {
       const offPanel = ctx.slots.register({
         name: 'main',
@@ -208,12 +321,12 @@ export function apply(ctx) {
         order: 1,
         label: () => t('nav'),
         locale: NS,
-      }, (owner = {}) => React.createElement(StoreLogo))
+      }, (owner = {}) => React.createElement(StoreLogo, { size: owner.size ?? 16 }))
       return () => {
         if (typeof offRow === 'function') offRow()
         if (typeof offPanel === 'function') offPanel()
       }
-    }, false)
+    }, true)
     ctx.slots.inject('sidebar.panellist', () => sidebarGate.available())
     // Fall back to visible once the sidebar is supported even if the gate's
     // inject never fires on this host.

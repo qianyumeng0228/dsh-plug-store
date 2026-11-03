@@ -54,6 +54,13 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.6）
+
+- [x] 侧栏/设置页图标换成店面（实心遮阳篷 + 屋身 + 门）。原标识是购物袋 + 加号，16px 下袋身是实心梯形、加号几乎占满，读起来是一个方块；新标识按 16px / 18px 逐像素调过：描边宽度 2.2（24 网格）是「18px 墙线仍为实心、16px 门洞不被填满」的拐点
+- [x] `StoreLogo` 开始接受宿主传入的 `size`。宿主 `SidebarRoot` 按 `size: wide ? 16 : 18` 渲染面板图标，此前写死 16，收起侧栏时比邻行小一圈
+- [x] **主侧栏条目此前从未注册**：`sidebarGate` 以 `initiallyVisible = false` 创建，而 `available()` 只置 `ready`、不置 `wanted`，没有任何地方调用 `setVisible(true)` —— 于是 `shouldShow` 恒 false，`sidebar.panellist` 与配套 `main` 面板都不注册。用 stub 宿主跑真实 bundle 复现：注册表里只有 `settings.section` / `settings.plugins.tab`。现改为默认可见，复测四项注册齐全
+- [x] 设置页导航行补上自己的图标：`settings.section` 只投影 `id`/`order`/`label`，宿主 `navIcon(id)` 是 `account`/`models`/`agent-presets`/`plugins`/`archived-sessions` 的封闭映射，其余一律回落到通用齿轮 —— 这就是「插件商店」行戴着一个不像商店的通用符号的原因。做法与 dshmarket 一致：按行可见文本认领自己那一行，加属性标记，用 `::before` 的 `mask-image` + `background-color: currentColor` 画店面（跟随宿主墨色，明暗主题都不假），`ctx.effect` 内挂样式表与 MutationObserver，卸载时摘标记删样式
+
 ## 已验证（0.1.5）
 
 - [x] 已安装卡片：状态改由「已安装」徽标表达，按钮一律是明确动作 —— 未装→安装；已装且有新版→更新 + 卸载；已装无新版→卸载；目录外依赖→卸载。此前是一个写着「已安装」的绿色按钮，既看不到卸载入口，又存在点一下即卸载的误操作风险
