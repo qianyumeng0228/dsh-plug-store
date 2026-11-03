@@ -54,6 +54,13 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.14）
+
+- [x] **删掉设置页导航图标改写整套代码**（`installSettingsNavIcon` / `describeNavRow` / `findRowByLabel` / `hide-before` 样式表）。用户叫停。它每 400ms~1.2s 往宿主 DOM 插节点、打属性、注样式，却一直没出结果，留着只有副作用没有收益
+- [x] **双滚动条**：iframe 高度不再靠猜。原先 `calc(100vh - 92px)` 比宿主设置页内容区高，宿主自己滚一条、iframe 内部再滚一条。现改成「先给够、再只允许收缩」：初值 `innerHeight - 包裹层top - 8`，每 300ms 量一次 `rect.bottom` 超出窗口多少就减多少，直到宿主文档不需要滚为止；**只收缩**是为了杜绝「变高→宿主滚动→top 变小→再变高」的失控回环，收敛后定时器自动停，窗口 resize 再重启
+- [x] 加 `/dsh-store/api/layout` 自检上报（`wrapH` / `wrapTop` / `wrapBottom` / `winH` / `docScrollH` / `hostScrolls`），`api/diagnose` 带出 `layout` 字段。判据就是 `hostScrolls === false`：宿主还要滚就说明仍有第二条
+- [x] 删干净之后差点带出一个致命残留：`client.js` 里 `installSettingsNavIcon(ctx, ...)` 的调用点在被删函数之外，会抛 `ReferenceError` 被 `apply()` 的 try 吞掉，导致**四个座位一个都注册不上**。已用 stub 宿主跑真实 bundle 复验：`apply threw: null`，`settings.section` / `settings.plugins.tab` / `main` / `sidebar.panellist` 四项齐全
+
 ## 已验证（0.1.13）
 
 - [x] 0.1.12 的上报证明我们那一行**确实被改到了**（`inserted: true`，行内已有我们的 svg），但用户仍看到立方体 —— 说明宿主的符号不是子元素，我们没碰它。而那一版上报里 `rowHtmlHead` 的前 240 字**全被自己插入的节点占满**，等于什么都没看见。改成在插入**之前**抓结构：`describeNavRow()` 输出行标签、class、每个子元素的 tag/class/文本/display/background-image/mask，外加行自身 `::before` 的 content/尺寸/mask

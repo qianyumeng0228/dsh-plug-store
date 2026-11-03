@@ -26,14 +26,13 @@ function bundledDataDir() {
 import { fileURLToPath } from 'node:url'
 
 /**
- * 客户端上报的「设置页导航图标」现场快照。
+ * 客户端上报的布局现场：商店 iframe 包裹层实际占了多少、宿主文档自己要不要滚。
  *
- * 宿主的 navIcon(id) 是封闭映射，第三方 section 只能拿到通用回退符号；我们靠
- * 改写那个回退 svg 来换上自己的图标。但图标到底出没出来，只有真实 DOM 说得清，
- * 而这一层是渲染进程里的事，外面看不到。所以客户端每次扫描把「找到了几行、
- * 每行文本是什么、有没有 svg、改写有没有成功」报回来，diagnose 原样带出。
+ * 「右侧两条滚动条」的判据就在这儿——宿主文档一旦需要滚（hostScrolls），那条是
+ * 宿主的，iframe 内部再有一条。外面看不到渲染进程的尺寸，只能让客户端报回来，
+ * 否则每次改动都得靠人截图来回确认。
  */
-let navIconReport = null
+let layoutReport = null
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload)
@@ -392,7 +391,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.13',
+        version: '0.1.14',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -507,12 +506,12 @@ export function apply(ctx, config = {}) {
         status: home.status || null,
         note: home.ok ? 'store reachable' : String(home.error || 'unreachable'),
       }
-      checks.navIcon = navIconReport
+      checks.layout = layoutReport
       sendJson(res, 200, checks)
     })
 
-    // 客户端上报设置页导航现场。只留最后一份，且限制体积，避免被当成存储用。
-    route('POST', '/dsh-store/api/navicon', async (req, res) => {
+    // 客户端上报布局现场。只留最后一份，字段固定且限长，避免被当成存储用。
+    route('POST', '/dsh-store/api/layout', async (req, res) => {
       let body
       try {
         body = await readBody(req)
@@ -520,20 +519,15 @@ export function apply(ctx, config = {}) {
         sendJson(res, 400, { error: 'bad json' })
         return
       }
-      const rows = Array.isArray(body && body.rows) ? body.rows.slice(0, 40) : []
-      navIconReport = {
+      const num = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v) : null)
+      layoutReport = {
         at: new Date().toISOString(),
-        label: String((body && body.label) || '').slice(0, 60),
-        scopes: body && body.scopes && typeof body.scopes === 'object' ? body.scopes : null,
-        matched: !!(body && body.matched),
-        hasSvg: !!(body && body.hasSvg),
-        inserted: !!(body && body.inserted),
-        glyphIsBefore: !!(body && body.glyphIsBefore),
-        // 现场结构原样带出：上一版按固定字段重建，把最有信息量的那个字段丢了
-        desc: body && body.desc ? body.desc : null,
-        marketDesc: body && body.marketDesc ? body.marketDesc : null,
-        rowHtmlHead: String((body && body.rowHtmlHead) || '').slice(0, 300),
-        rows: rows.map((r) => String(r).slice(0, 40)),
+        wrapH: num(body && body.wrapH),
+        wrapTop: num(body && body.wrapTop),
+        wrapBottom: num(body && body.wrapBottom),
+        winH: num(body && body.winH),
+        docScrollH: num(body && body.docScrollH),
+        hostScrolls: !!(body && body.hostScrolls),
       }
       sendJson(res, 200, { ok: true })
     })

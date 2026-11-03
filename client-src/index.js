@@ -23,53 +23,90 @@ const NS = 'dsh-store-market'
 const SIDEBAR_PANEL_ID = 'dsh-store-market'
 
 function StoreFrame() {
-  // The iframe is a viewport that scrolls itself. It must NOT be resized to its
-  // content height: inside the frame, `position: fixed` resolves against the
-  // iframe viewport, so a stretched frame makes the detail modal, the queue dock
-  // and the toast position themselves against the whole document — the modal
-  // lands thousands of pixels below what the user is looking at.
+  // iframe 是一个自己滚动的视口。不能把它撑到内容高度：iframe 内的
+  // `position: fixed` 按 iframe 视口解析，撑满整篇文档后详情弹层会落到
+  // 文档正中，用户点卡片只看到一层灰。
   //
-  // The height has to be the container's, not `100vh`. `100vh` in the host
-  // document is the whole window, which is taller than the dialog's content box,
-  // so the host scrolled AND the frame scrolled — two scrollbars side by side.
-  // Fit the parent instead, and fall back to vh only if the ancestor chain
-  // gives us no resolvable height (clientHeight collapses).
+  // 但高度也不能猜。`calc(100vh - 92px)` 比宿主设置页内容区高出一截，
+  // 宿主就自己滚一条、iframe 内部再滚一条 —— 双滚动条就是这么来的。
+  // 先给一个够用的初值，再"只允许收缩"地校正：包裹层底边超出窗口多少就减掉
+  // 多少，直到宿主文档不再需要滚为止。只收缩是为了杜绝
+  // 「变高→宿主滚动→top 变小→再变高」的失控回环；收敛后定时器就停掉。
   const wrapRef = React.useRef(null)
-  const [height, setHeight] = React.useState('100%')
+  const [px, setPx] = React.useState(0)
   React.useEffect(() => {
-    const measure = () => {
-      const el = wrapRef.current
-      if (!el) return
-      const parent = el.parentElement
-      const avail = parent ? parent.clientHeight : 0
-      setHeight(avail > 160 ? '100%' : 'calc(100vh - 92px)')
+    const first = wrapRef.current
+    if (!first) return
+    const floor = 320
+    let disposed = false
+    let settled = false
+    let timer = null
+    let lastLayout = ''
+    let current = Math.max(floor, Math.round(window.innerHeight - first.getBoundingClientRect().top - 8))
+    setPx(current)
+
+    const snapshot = () => {
+      const node = wrapRef.current
+      if (!node) return null
+      const rect = node.getBoundingClientRect()
+      return {
+        wrapH: Math.round(rect.height),
+        wrapTop: Math.round(rect.top),
+        wrapBottom: Math.round(rect.bottom),
+        winH: window.innerHeight,
+        docScrollH: document.documentElement.scrollHeight,
+        hostScrolls: document.documentElement.scrollHeight > window.innerHeight + 2,
+      }
     }
-    measure()
-    window.addEventListener('resize', measure)
-    // 宿主可能在我们挂载之后才把内容区撑开，所以跟着容器尺寸重新判定；
-    // 这里只在 '100%' 与 vh 兜底之间切换，不会反过来改变容器高度，不构成回环。
-    let ro = null
-    if (typeof ResizeObserver !== 'undefined' && wrapRef.current?.parentElement) {
-      ro = new ResizeObserver(measure)
-      ro.observe(wrapRef.current.parentElement)
+    const report = (snap) => {
+      const json = JSON.stringify(snap)
+      if (json === lastLayout) return
+      lastLayout = json
+      fetch('/dsh-store/api/layout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-dsh-store': '1' },
+        body: json,
+      }).catch(() => {})
     }
+    const tick = () => {
+      const node = wrapRef.current
+      if (!node || disposed) return
+      const overflow = Math.round(node.getBoundingClientRect().bottom - window.innerHeight)
+      if (overflow > 2) {
+        current = Math.max(floor, current - overflow)
+        setPx(current)
+      }
+      const snap = snapshot()
+      if (!snap) return
+      report(snap)
+      // 宿主不再需要滚、且我们确实占到了窗口底，就算收敛
+      if (!snap.hostScrolls && overflow <= 2 && snap.wrapBottom <= snap.winH + 2) {
+        settled = true
+        clearInterval(timer)
+        timer = null
+      }
+    }
+    timer = setInterval(tick, 300)
+    const onResize = () => {
+      if (disposed) return
+      current = Math.max(floor, Math.round(window.innerHeight - (wrapRef.current ? wrapRef.current.getBoundingClientRect().top : 0) - 8))
+      setPx(current)
+      if (settled && !timer) { settled = false; timer = setInterval(tick, 300) }
+      tick()
+    }
+    window.addEventListener('resize', onResize)
     return () => {
-      window.removeEventListener('resize', measure)
-      if (ro) ro.disconnect()
+      disposed = true
+      if (timer) clearInterval(timer)
+      window.removeEventListener('resize', onResize)
     }
   }, [])
+  const height = px ? px + 'px' : 'calc(100vh - 92px)'
   return React.createElement(
     'div',
     {
       ref: wrapRef,
-      style: {
-        display: 'block',
-        height,
-        // hidden, not auto: the frame owns the single scrollbar; a second one
-        // here is exactly what the user is reporting.
-        overflow: 'hidden',
-        background: '#ffffff',
-      },
+      style: { display: 'block', height: height, overflow: 'hidden', background: '#ffffff' },
     },
     React.createElement('iframe', {
       src: '/dsh-store/',
@@ -119,284 +156,6 @@ function StoreLogo({ size = 16 }) {
       STORE_PATHS.map((d, i) => React.createElement('path', { key: i, d })),
     ),
   )
-}
-
-const NAV_ICON_FLAG = 'data-dsh-store-nav-icon'
-
-// 宿主设置页那一行的元素类型不在任何公开契约里，而且不同宿主外壳会给不同
-// class（navCell / navItem / navRow）。只押 `nav button` 一种，猜错就整个
-// 功能静默失效 —— 这正是 0.1.6~0.1.10 在真实宿主里没生效的原因。
-const NAV_ROW_SELECTORS = [
-  '[role="dialog"] nav button',
-  'nav button',
-  '[class*="navCell"]',
-  '[class*="navItem"]',
-  '[class*="navRow"]',
-  '[role="dialog"] nav [role="button"]',
-  'button',
-]
-
-function normalizeText(s) {
-  return String(s == null ? '' : s).replace(/\s+/g, ' ').trim()
-}
-
-/** 行里真正显示标签的那段文本：优先取最后一个 span，避开尾部的计数/徽标。 */
-function navRowLabel(el) {
-  const spans = el.querySelectorAll('span')
-  for (let i = spans.length - 1; i >= 0; i--) {
-    const t = normalizeText(spans[i].textContent)
-    if (t) return t
-  }
-  return normalizeText(el.textContent)
-}
-
-/** 标签后面只跟了计数/括号之类时，仍算同一行。 */
-function labelMatches(rowText, wanted) {
-  if (rowText === wanted) return true
-  if (!rowText.startsWith(wanted)) return false
-  return /^[\d\s()（）·|/.]*$/.test(rowText.slice(wanted.length))
-}
-
-function findOwnNavRow(label) {
-  if (!label) return null
-  for (const sel of NAV_ROW_SELECTORS) {
-    let list
-    try {
-      list = document.querySelectorAll(sel)
-    } catch (e) {
-      continue
-    }
-    for (const el of list) {
-      if (labelMatches(navRowLabel(el), label)) return el
-      if (labelMatches(normalizeText(el.textContent), label)) return el
-    }
-  }
-  return null
-}
-
-/** 行里根本没有 svg 时（回退符号可能是 i/img/背景图），自己插一个进去。 */
-function buildStorefrontSvg(size) {
-  const NS = 'http://www.w3.org/2000/svg'
-  const svg = document.createElementNS(NS, 'svg')
-  svg.setAttribute('width', String(size))
-  svg.setAttribute('height', String(size))
-  svg.setAttribute('data-dsh-store-inserted', '1')
-  svg.style.flex = 'none'
-  paintStorefront(svg)
-  return svg
-}
-
-/** Draw the storefront into the shell's fallback svg, keeping its size and ink. */
-function paintStorefront(svg) {
-  const NS = 'http://www.w3.org/2000/svg'
-  svg.setAttribute('viewBox', STORE_VB)
-  svg.setAttribute('fill', 'none')
-  svg.setAttribute('stroke', 'currentColor')
-  svg.setAttribute('stroke-width', STORE_SW)
-  svg.setAttribute('stroke-linecap', 'round')
-  svg.setAttribute('stroke-linejoin', 'round')
-  while (svg.firstChild) svg.removeChild(svg.firstChild)
-  const g = document.createElementNS(NS, 'g')
-  g.setAttribute('transform', STORE_SHIFT)
-  for (const d of STORE_PATHS) {
-    const p = document.createElementNS(NS, 'path')
-    p.setAttribute('d', d)
-    g.appendChild(p)
-  }
-  svg.appendChild(g)
-}
-
-/**
- * Give our row in the settings navigation a storefront.
- *
- * Rewriting the fallback svg in place rather than hiding it and drawing a CSS
- * `::before` mask: the mask route depends on the row being a flex box, on nothing
- * else claiming `::before`, and on mask-image support — any one of those failing
- * silently leaves the shell's glyph. The svg is already sized and coloured by the
- * shell, so editing it inherits both, light and dark themes included.
- *
- * Scope stays narrow: only the row whose text equals our current label is
- * touched, and the flag plus a re-check on every mutation keep a locale switch or
- * a shell re-render from leaving the label and the glyph disagreeing.
- */
-/**
- * 把一行的构成写清楚。
- *
- * 上一版上报的是「插入之后」的 innerHTML 前 240 字，结果那 240 字全被我们自己
- * 插进去的 svg 占满了，宿主的符号到底画在哪儿一点没看见 —— 上报要是有用，
- * 就得先看清敌人长什么样。这里改成结构化的 children + 行自身的 ::before。
- */
-function describeNavRow(el) {
-  if (!el) return null
-  const kids = []
-  for (const kid of el.children) {
-    let cs
-    try { cs = getComputedStyle(kid) } catch (e) { continue }
-    kids.push({
-      tag: String(kid.tagName).toLowerCase(),
-      cls: String(kid.getAttribute('class') || '').slice(0, 60),
-      text: normalizeText(kid.textContent).slice(0, 24),
-      display: cs.display,
-      bg: cs.backgroundImage && cs.backgroundImage !== 'none' ? cs.backgroundImage.slice(0, 70) : null,
-      mask: (cs.maskImage || cs.webkitMaskImage || 'none') !== 'none' ? 'yes' : null,
-    })
-  }
-  let before = null
-  try {
-    const bs = getComputedStyle(el, '::before')
-    before = {
-      content: bs.content === 'none' ? null : String(bs.content).slice(0, 24),
-      bg: bs.backgroundImage && bs.backgroundImage !== 'none' ? bs.backgroundImage.slice(0, 70) : null,
-      mask: (bs.maskImage || bs.webkitMaskImage || 'none') !== 'none' ? 'yes' : null,
-      w: bs.width, h: bs.height,
-    }
-  } catch (e) { /* ignore */ }
-  return { tag: String(el.tagName).toLowerCase(), cls: String(el.className || '').slice(0, 60), kids, before }
-}
-
-/** 邻行（宿主自己或别的插件的行）长什么样，是判断「图标该怎么给」的最好参照。 */
-function findRowByLabel(label) {
-  for (const sel of NAV_ROW_SELECTORS) {
-    let list
-    try { list = document.querySelectorAll(sel) } catch (e) { continue }
-    if (!list.length) continue
-    for (const el of list) {
-      if (labelMatches(navRowLabel(el), label) || labelMatches(normalizeText(el.textContent), label)) return el
-    }
-  }
-  return null
-}
-
-function installSettingsNavIcon(ctx, resolveLabel) {
-  if (typeof document === 'undefined') return
-  ctx.effect(() => {
-    let disposed = false
-    let scheduled = false
-    let lastReport = ''
-    // 宿主的符号可能画在行自己的 ::before 上，藏子元素没用；只能给它让位。
-    // 规则只作用于我们打过标记的行，不碰别的行。
-    const styleTag = document.createElement('style')
-    styleTag.dataset.plugin = 'dsh-store-market'
-    styleTag.textContent =
-      '[data-dsh-store-hide-before]::before{content:none!important;display:none!important;width:0!important;height:0!important;background-image:none!important;-webkit-mask-image:none!important;mask-image:none!important}'
-    document.head.appendChild(styleTag)
-    const report = (snapshot) => {
-      const json = JSON.stringify(snapshot)
-      if (json === lastReport) return
-      lastReport = json
-      // 只在「没走通」的上报：正常改写那条路径不调用这里。
-      fetch('/dsh-store/api/navicon', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-dsh-store': '1' },
-        body: json,
-      }).catch(() => {})
-    }
-    const sync = () => {
-      scheduled = false
-      if (disposed) return
-      let wanted = ''
-      try {
-        wanted = normalizeText(resolveLabel())
-      } catch (e) {
-        wanted = ''
-      }
-      const scopes = {}
-      for (const sel of NAV_ROW_SELECTORS) {
-        try {
-          scopes[sel] = document.querySelectorAll(sel).length
-        } catch (e) {
-          scopes[sel] = -1
-        }
-      }
-      const row = wanted ? findOwnNavRow(wanted) : null
-      // 上一轮被标记的行可能已经不属于我们了（改名、语言切换）
-      for (const stale of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) {
-        if (stale === row) continue
-        stale.removeAttribute(NAV_ICON_FLAG)
-        stale.removeAttribute('data-dsh-store-hide-before')
-        const inserted = stale.querySelector('svg[data-dsh-store-inserted]')
-        if (inserted) stale.removeChild(inserted)
-        else {
-          const svg = stale.querySelector('svg')
-          if (svg) svg.removeAttribute('stroke-width')
-        }
-        for (const hidden of stale.querySelectorAll('[data-dsh-store-hidden]')) {
-          hidden.style.display = ''
-          hidden.removeAttribute('data-dsh-store-hidden')
-        }
-      }
-      const svg = row ? row.querySelector('svg') : null
-      if (row && !svg) {
-        // 先记下插入之前的样子，否则上报里全是自己的节点，看不到宿主的符号
-        const desc = describeNavRow(row)
-        // 插件市场 那一行是现成的参照：它显示正常，照它抄就知道图标该怎么给
-        const marketDesc = describeNavRow(findRowByLabel('插件市场'))
-        const glyphIsBefore = !!(desc && desc.before && (desc.before.bg || desc.before.mask))
-        if (!row.querySelector('svg[data-dsh-store-inserted]')) {
-          for (const kid of row.children) {
-            if (String(kid.tagName).toLowerCase() === 'svg') continue
-            if (normalizeText(kid.textContent) === '') {
-              kid.setAttribute('data-dsh-store-hidden', '1')
-              kid.style.display = 'none'
-              break
-            }
-          }
-          // 宿主的符号画在行自己的 ::before 上时，藏子元素没用，得给它让位
-          if (glyphIsBefore) row.setAttribute('data-dsh-store-hide-before', '1')
-          row.insertBefore(buildStorefrontSvg(16), row.firstChild)
-          row.setAttribute(NAV_ICON_FLAG, 'store')
-        }
-        report({ label: wanted, scopes, matched: true, hasSvg: false, inserted: true,
-          glyphIsBefore: !!glyphIsBefore, desc: desc, marketDesc: marketDesc })
-        return
-      }
-      if (row && svg) {
-        if (row.getAttribute(NAV_ICON_FLAG) !== 'store') {
-          row.setAttribute(NAV_ICON_FLAG, 'store')
-          paintStorefront(svg)
-        }
-        return
-      }
-      // 一行都没找到：把看到的文本都带回去，才能判断是选择器不对还是标签不对
-      const texts = []
-      try {
-        for (const sel of NAV_ROW_SELECTORS) {
-          const list = document.querySelectorAll(sel)
-          if (!list.length) continue
-          for (const b of list) texts.push(navRowLabel(b) || normalizeText(b.textContent))
-          break
-        }
-      } catch (e) { /* ignore */ }
-      report({ label: wanted, scopes, matched: false, hasSvg: false, rows: texts.slice(0, 40) })
-    }
-    const schedule = () => {
-      if (scheduled || disposed) return
-      scheduled = true
-      queueMicrotask(sync)
-    }
-    sync()
-    const observer = new MutationObserver(schedule)
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
-    // 兜底：对话框是懒挂载的，某些宿主不会为它改动 body 子树；低频重扫一次的成本
-    // 只是几次字符串比较。
-    const timer = setInterval(schedule, 1200)
-    return () => {
-      disposed = true
-      observer.disconnect()
-      clearInterval(timer)
-      for (const row of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) {
-        row.removeAttribute(NAV_ICON_FLAG)
-        row.removeAttribute('data-dsh-store-hide-before')
-        const inserted = row.querySelector('svg[data-dsh-store-inserted]')
-        if (inserted) row.removeChild(inserted)
-        for (const hidden of row.querySelectorAll('[data-dsh-store-hidden]')) {
-          hidden.style.display = ''
-          hidden.removeAttribute('data-dsh-store-hidden')
-        }
-      }
-      styleTag.remove()
-    }
-  }, 'dsh-store-market: settings nav icon')
 }
 
 /**
@@ -449,8 +208,6 @@ export function apply(ctx) {
       en: { nav: 'Plugin Store', desc: 'DSH Plugin Store — browse and install community plugins' },
     }), 'dsh-store-market: dictionaries')
     const t = ctx.locale.bind(NS)
-
-    installSettingsNavIcon(ctx, () => t('nav'))
 
     const frame = () => React.createElement(StoreFrame)
 
