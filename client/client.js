@@ -47,25 +47,43 @@ var __dshStoreClient = (() => {
   var NS = "dsh-store-market";
   var SIDEBAR_PANEL_ID = "dsh-store-market";
   function StoreFrame() {
+    const wrapRef = import_react.default.useRef(null);
+    const [height, setHeight] = import_react.default.useState("100%");
+    import_react.default.useEffect(() => {
+      const measure = () => {
+        const el = wrapRef.current;
+        if (!el) return;
+        const parent = el.parentElement;
+        const avail = parent ? parent.clientHeight : 0;
+        setHeight(avail > 160 ? "100%" : "calc(100vh - 92px)");
+      };
+      measure();
+      window.addEventListener("resize", measure);
+      let ro = null;
+      if (typeof ResizeObserver !== "undefined" && wrapRef.current?.parentElement) {
+        ro = new ResizeObserver(measure);
+        ro.observe(wrapRef.current.parentElement);
+      }
+      return () => {
+        window.removeEventListener("resize", measure);
+        if (ro) ro.disconnect();
+      };
+    }, []);
     return import_react.default.createElement(
       "div",
       {
+        ref: wrapRef,
         style: {
           display: "block",
-          height: "calc(100vh - 92px)",
-          overflow: "auto",
+          height,
+          overflow: "hidden",
           background: "#ffffff"
         }
       },
       import_react.default.createElement("iframe", {
         src: "/dsh-store/",
         title: "DSH \u63D2\u4EF6\u5546\u5E97",
-        style: {
-          width: "100%",
-          height: "calc(100vh - 92px)",
-          border: "0",
-          display: "block"
-        }
+        style: { width: "100%", height: "100%", border: "0", display: "block" }
       })
     );
   }
@@ -84,21 +102,22 @@ var __dshStoreClient = (() => {
         "aria-hidden": "true",
         style: { display: "block" }
       },
-      import_react.default.createElement("path", {
-        d: "M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z",
-        fill: "currentColor",
-        stroke: "none"
-      }),
-      import_react.default.createElement("path", {
-        d: "M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2"
-      }),
-      import_react.default.createElement("path", {
-        d: "M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2"
-      })
+      import_react.default.createElement("g", { transform: "translate(0 -0.7)" },
+        import_react.default.createElement("path", {
+          d: "M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z",
+          fill: "currentColor",
+          stroke: "none"
+        }),
+        import_react.default.createElement("path", {
+          d: "M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2"
+        }),
+        import_react.default.createElement("path", {
+          d: "M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2"
+        }))
     );
   }
   function storeMaskUrl() {
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' + 'stroke="#000" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' + '<path d="M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z" fill="#000" stroke="none"/>' + '<path d="M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2"/>' + '<path d="M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2"/>' + "</svg>";
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' + 'stroke="#000" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' + '<g transform="translate(0 -0.7)">' + '<path d="M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z" fill="#000" stroke="none"/>' + '<path d="M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2"/>' + '<path d="M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2"/>' + "</g>" + "</svg>";
     return `data:image/svg+xml,${encodeURIComponent(svg)}`;
   }
   const NAV_ICON_MARKER = "data-dsh-store-nav-icon";

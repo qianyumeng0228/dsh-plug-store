@@ -23,33 +23,58 @@ const NS = 'dsh-store-market'
 const SIDEBAR_PANEL_ID = 'dsh-store-market'
 
 function StoreFrame() {
-  // The iframe is a fixed-height viewport that scrolls itself. It must NOT be
-  // resized to its content height: inside the frame, `position: fixed` resolves
-  // against the iframe viewport, so a stretched frame makes the detail modal,
-  // the queue dock and the toast position themselves against the whole document
-  // — the modal lands thousands of pixels below what the user is looking at.
-  const frameStyle = {
-    width: '100%',
-    height: 'calc(100vh - 92px)',
-    border: '0',
-    display: 'block',
-  }
+  // The iframe is a viewport that scrolls itself. It must NOT be resized to its
+  // content height: inside the frame, `position: fixed` resolves against the
+  // iframe viewport, so a stretched frame makes the detail modal, the queue dock
+  // and the toast position themselves against the whole document — the modal
+  // lands thousands of pixels below what the user is looking at.
+  //
+  // The height has to be the container's, not `100vh`. `100vh` in the host
+  // document is the whole window, which is taller than the dialog's content box,
+  // so the host scrolled AND the frame scrolled — two scrollbars side by side.
+  // Fit the parent instead, and fall back to vh only if the ancestor chain
+  // gives us no resolvable height (clientHeight collapses).
+  const wrapRef = React.useRef(null)
+  const [height, setHeight] = React.useState('100%')
+  React.useEffect(() => {
+    const measure = () => {
+      const el = wrapRef.current
+      if (!el) return
+      const parent = el.parentElement
+      const avail = parent ? parent.clientHeight : 0
+      setHeight(avail > 160 ? '100%' : 'calc(100vh - 92px)')
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    // 宿主可能在我们挂载之后才把内容区撑开，所以跟着容器尺寸重新判定；
+    // 这里只在 '100%' 与 vh 兜底之间切换，不会反过来改变容器高度，不构成回环。
+    let ro = null
+    if (typeof ResizeObserver !== 'undefined' && wrapRef.current?.parentElement) {
+      ro = new ResizeObserver(measure)
+      ro.observe(wrapRef.current.parentElement)
+    }
+    return () => {
+      window.removeEventListener('resize', measure)
+      if (ro) ro.disconnect()
+    }
+  }, [])
   return React.createElement(
     'div',
     {
+      ref: wrapRef,
       style: {
         display: 'block',
-        height: 'calc(100vh - 92px)',
-        // auto, not hidden: if a surface gives us less than that, the wrapper
-        // scrolls instead of silently clipping the bottom of the store.
-        overflow: 'auto',
+        height,
+        // hidden, not auto: the frame owns the single scrollbar; a second one
+        // here is exactly what the user is reporting.
+        overflow: 'hidden',
         background: '#ffffff',
       },
     },
     React.createElement('iframe', {
       src: '/dsh-store/',
       title: 'DSH 插件商店',
-      style: frameStyle,
+      style: { width: '100%', height: '100%', border: '0', display: 'block' },
     }),
   )
 }
@@ -76,17 +101,21 @@ function StoreLogo({ size = 16 }) {
       'aria-hidden': 'true',
       style: { display: 'block' },
     },
-    React.createElement('path', {
-      d: 'M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z',
-      fill: 'currentColor',
-      stroke: 'none',
-    }),
-    React.createElement('path', {
-      d: 'M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2',
-    }),
-    React.createElement('path', {
-      d: 'M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2',
-    }),
+    React.createElement(
+      'g',
+      { transform: 'translate(0 -0.7)' },
+      React.createElement('path', {
+        d: 'M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z',
+        fill: 'currentColor',
+        stroke: 'none',
+      }),
+      React.createElement('path', {
+        d: 'M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2',
+      }),
+      React.createElement('path', {
+        d: 'M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2',
+      }),
+    ),
   )
 }
 
@@ -101,9 +130,11 @@ function storeMaskUrl() {
   const svg =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
     'stroke="#000" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<g transform="translate(0 -0.7)">' +
     '<path d="M2.6 9.2L4.55 4.5A1.6 1.6 0 0 1 6.04 3.5h11.92a1.6 1.6 0 0 1 1.49 1L21.4 9.2Z" fill="#000" stroke="none"/>' +
     '<path d="M5.3 9.2v10.2a1.2 1.2 0 0 0 1.2 1.2h11a1.2 1.2 0 0 0 1.2-1.2V9.2"/>' +
     '<path d="M9.4 20.6v-5.2a1.1 1.1 0 0 1 1.1-1.1h3a1.1 1.1 0 0 1 1.1 1.1v5.2"/>' +
+    '</g>' +
     '</svg>'
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
 }
