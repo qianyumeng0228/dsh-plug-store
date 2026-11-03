@@ -390,7 +390,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.15',
+        version: '0.1.16',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -522,12 +522,25 @@ export function apply(ctx, config = {}) {
         return
       }
       const num = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v) : null)
+      const chain = Array.isArray(body && body.chain)
+        ? body.chain.slice(0, 12).map((c) => ({
+            tag: String(c && c.tag || '').slice(0, 20),
+            cls: String(c && c.cls || '').slice(0, 48),
+            ch: num(c && c.ch), sh: num(c && c.sh),
+            cw: num(c && c.cw), sw: num(c && c.sw),
+            oy: String(c && c.oy || '').slice(0, 20),
+          }))
+        : null
       layoutReport = {
         at: new Date().toISOString(),
         iframeH: num(body && body.selfH),
+        iframeW: num(body && body.selfW),
         parentH: num(body && body.parentH),
+        parentW: num(body && body.parentW),
         parentScrollH: num(body && body.parentScrollH),
+        parentScrollW: num(body && body.parentScrollW),
         hostScrolls: !!(body && body.hostScrolls),
+        chain: chain,
       }
       sendJson(res, 200, { ok: true })
     })
