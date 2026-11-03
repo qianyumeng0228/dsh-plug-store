@@ -54,6 +54,13 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.12）
+
+- [x] **靠上报拿到了真实 DOM，前三版的猜测全错**。宿主里 0.1.11 自己报回来：`[role="dialog"] nav button` 命中 **0** 行（设置页是整页布局、带分组标题，根本没有 `role=dialog` 祖先），`nav button` 命中 **26** 行，我们那一行 `matched: true` —— 但 **`hasSvg: false`**：这个宿主的回退符号**不是 `<svg>`**。所以前三版「改写回退 svg」的路径从来没执行到，图标自然出不来
+- [x] 行内没有 svg 时改为**插入我们自己的 svg，并把行里那个不带文本的前导元素（图标位）藏掉**，否则两个符号并排更难看。卸载或改语言时把 `display` 还原、移除插入节点
+- [x] 修掉上报本身丢字段：`api/navicon` 之前按固定字段重建快照，把最有信息量的 `rowHtmlHead` 过滤掉了（这也是我一开始只看到 `applied:false` 而看不到真相的原因）。现原样带上 `rowTag` / `rowClass` / `rowHtmlHead` / `inserted`
+- [x] 复现宿主真实形状（`nav` 里的 `button`，行内图标是 `<i class="glyph">`）跑真实 bundle：插入 svg 5 条 path 描边 1.9、原 glyph `display:none`、邻行不受影响、第二轮不重复插入
+
 ## 已验证（0.1.11）
 
 - [x] 找那一行的方式**不再押单一结构**。此前只认 `[role="dialog"] nav button`，而宿主设置页外壳并不在任何公开契约里，真实界面还带分组标题（个人 / 集成 / 记录与应用），说明渲染它的是另一个组件 —— 押错就整个功能静默失效，这正是 0.1.6~0.1.10 图标一直没出来的原因。现按七档选择器依次尝试（`[role=dialog] nav button` → `nav button` → `[class*="navCell"]` → `[class*="navItem"]` → `[class*="navRow"]` → `[role=dialog] nav [role=button]` → `button`）

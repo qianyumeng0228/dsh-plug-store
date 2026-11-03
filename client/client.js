@@ -272,15 +272,33 @@ function installSettingsNavIcon(ctx, resolveLabel) {
           const svg = stale.querySelector('svg')
           if (svg) svg.removeAttribute('stroke-width')
         }
+        for (const hidden of stale.querySelectorAll('[data-dsh-store-hidden]')) {
+          hidden.style.display = ''
+          hidden.removeAttribute('data-dsh-store-hidden')
+        }
       }
       const svg = row ? row.querySelector('svg') : null
       if (row && !svg) {
-        // 回退符号不是 svg：插我们自己的，同时上报现场
-        const inserted = buildStorefrontSvg(16)
-        row.insertBefore(inserted, row.firstChild)
-        row.setAttribute(NAV_ICON_FLAG, 'store')
+        // 回退符号不是 svg（这个宿主的实测就是这样：nav button 命中 26 行、
+        // 我们那一行 matched，但行内没有 svg）。插自己的进去，并把行里那个
+        // 不带文本的前导元素（图标位）藏掉，否则两个符号并排更难看。
+        const already = row.querySelector('svg[data-dsh-store-inserted]')
+        if (!already) {
+          for (const kid of row.children) {
+            // SVG 元素在 HTML 文档里 tagName 是小写 'svg'
+            if (String(kid.tagName).toLowerCase() === 'svg') continue
+            if (normalizeText(kid.textContent) === '') {
+              kid.setAttribute('data-dsh-store-hidden', '1')
+              kid.style.display = 'none'
+              break
+            }
+          }
+          row.insertBefore(buildStorefrontSvg(16), row.firstChild)
+          row.setAttribute(NAV_ICON_FLAG, 'store')
+        }
         report({ label: wanted, scopes, matched: true, hasSvg: false, inserted: true,
-          rowHtmlHead: String(row.innerHTML).slice(0, 160) })
+          rowTag: row.tagName, rowClass: String(row.className || '').slice(0, 80),
+          rowHtmlHead: String(row.innerHTML).slice(0, 240) })
         return
       }
       if (row && svg) {
@@ -321,6 +339,10 @@ function installSettingsNavIcon(ctx, resolveLabel) {
         row.removeAttribute(NAV_ICON_FLAG)
         const inserted = row.querySelector('svg[data-dsh-store-inserted]')
         if (inserted) row.removeChild(inserted)
+        for (const hidden of row.querySelectorAll('[data-dsh-store-hidden]')) {
+          hidden.style.display = ''
+          hidden.removeAttribute('data-dsh-store-hidden')
+        }
       }
     }
   }, 'dsh-store-market: settings nav icon')
