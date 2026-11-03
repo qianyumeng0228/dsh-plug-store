@@ -23,65 +23,33 @@ const NS = 'dsh-store-market'
 const SIDEBAR_PANEL_ID = 'dsh-store-market'
 
 function StoreFrame() {
-  // The iframe height tracks its document's content height, so the host
-  // section scrollbar is the ONLY scrollbar: no scrollbar appears inside the
-  // iframe (site html/body are overflow:hidden) and the store content is fully
-  // browsable through the host's right-hand scrollbar (same feel as dshmarket).
-  const frameRef = React.useRef(null)
-  React.useEffect(() => {
-    const sync = () => {
-      const f = frameRef.current
-      if (!f) return
-      try {
-        const doc = f.contentDocument
-        const h = Math.max(
-          doc.documentElement.scrollHeight,
-          doc.body ? doc.body.scrollHeight : 0
-        )
-        const cur = parseFloat(f.style.height || '')
-        if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) {
-          f.style.height = h + 'px'
-        }
-      } catch (e) {
-        /* cross-origin or not loaded yet */
-      }
-    }
-    sync()
-    const timer = setInterval(sync, 500)
-    return () => clearInterval(timer)
-  }, [])
-  const onLoad = () => {
-    const f = frameRef.current
-    if (!f) return
-    try {
-      const doc = f.contentDocument
-      const h = Math.max(
-        doc.documentElement.scrollHeight,
-        doc.body ? doc.body.scrollHeight : 0
-      )
-      if (h > 0) f.style.height = h + 'px'
-    } catch (e) {}
+  // The iframe is a fixed-height viewport that scrolls itself. It must NOT be
+  // resized to its content height: inside the frame, `position: fixed` resolves
+  // against the iframe viewport, so a stretched frame makes the detail modal,
+  // the queue dock and the toast position themselves against the whole document
+  // — the modal lands thousands of pixels below what the user is looking at.
+  const frameStyle = {
+    width: '100%',
+    height: 'calc(100vh - 92px)',
+    border: '0',
+    display: 'block',
   }
   return React.createElement(
     'div',
     {
       style: {
         display: 'block',
-        minHeight: 'calc(100vh - 92px)',
+        height: 'calc(100vh - 92px)',
+        // auto, not hidden: if a surface gives us less than that, the wrapper
+        // scrolls instead of silently clipping the bottom of the store.
+        overflow: 'auto',
         background: '#ffffff',
       },
     },
     React.createElement('iframe', {
-      ref: frameRef,
       src: '/dsh-store/',
       title: 'DSH 插件商店',
-      onLoad,
-      style: {
-        width: '100%',
-        height: 'calc(100vh - 92px)',
-        border: '0',
-        display: 'block',
-      },
+      style: frameStyle,
     }),
   )
 }

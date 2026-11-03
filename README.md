@@ -54,6 +54,12 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.8）
+
+- [x] **详情弹层不再落到页面最底下**。`StoreFrame` 原先把 iframe 高度同步成内容 `scrollHeight`（为了只用宿主那一条滚动条），但 iframe 内的 `position:fixed` 是按 iframe 视口解析的 —— 视口被撑成整篇文档后，`.mask` 的 `inset:0 + align-items:center` 会把弹层放到文档正中。实测复现：内容高 7201px 时弹层落在窗口下方 3371px 处，而窗口只有 1145px 高，用户点卡片只见一层灰、要往下滚 2326px 才看到弹层；待装栏与 toast 同病。现 iframe 固定 `calc(100vh - 92px)` 自己滚动，实测弹层 top 213 / bottom 840 全在 1053px 可见视口内，待装栏贴可见底部 987
+- [x] 外层容器用 `overflow:auto` 而非 `hidden`：某个宿主表面给不到那么高时，宁可多一条滚动条，也不要把商店底部裁掉
+- [x] 商店 UI 改为真分页（见 dsh-store 0.1.8）：页码 + 上一页/下一页 + 第 x/y 页 + 每页 24/48/96 可选并持久化，列表上下各一条分页条
+
 ## 已验证（0.1.7）
 
 - [x] `/dsh-store/data/plugins.json` 支持 gzip 与 ETag 协商。此前 `res.end(readFileSync(...))` 原样下发近 20MB，浏览器每次打开商店都重下再 parse；现按 `Accept-Encoding` 回 gzip（实测样本 520KB→34KB），并带弱 ETag：命中 `If-None-Match` 直接 304 无正文。压缩走 zlib 异步接口不占宿主事件循环，结果按 `path|etag` 缓存（快照每天换，只压一次）
