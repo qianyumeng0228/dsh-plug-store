@@ -54,6 +54,12 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.7）
+
+- [x] `/dsh-store/data/plugins.json` 支持 gzip 与 ETag 协商。此前 `res.end(readFileSync(...))` 原样下发近 20MB，浏览器每次打开商店都重下再 parse；现按 `Accept-Encoding` 回 gzip（实测样本 520KB→34KB），并带弱 ETag：命中 `If-None-Match` 直接 304 无正文。压缩走 zlib 异步接口不占宿主事件循环，结果按 `path|etag` 缓存（快照每天换，只压一次）
+- [x] `localDataFiles()` 不再为了拿 `pluginsBytes` 把整个快照读进内存，改 `statSync().size`
+- [x] 临时目录真实加载插件、以假 `webServer` 驱动真实路由复测 14 项：无 gzip 请求逐字节一致、带 gzip 可还原、`content-length` 与实发字节一致、`Vary: Accept-Encoding`、304 无正文、过期 ETag 仍 200、重复请求命中压缩缓存
+
 ## 已验证（0.1.6）
 
 - [x] 侧栏/设置页图标换成店面（实心遮阳篷 + 屋身 + 门）。原标识是购物袋 + 加号，16px 下袋身是实心梯形、加号几乎占满，读起来是一个方块；新标识按 16px / 18px 逐像素调过：描边宽度 2.2（24 网格）是「18px 墙线仍为实心、16px 门洞不被填满」的拐点

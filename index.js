@@ -6,9 +6,10 @@
  * 零运行时依赖；仅依赖宿主提供的 webServer 服务。
  */
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
+import { gzip } from 'node:zlib'
 
 export const name = 'dsh-store-market'
 
@@ -251,8 +252,69 @@ function localDataFiles() {
   return {
     dir,
     plugins: existsSync(pluginsFile) ? pluginsFile : null,
-    pluginsBytes: existsSync(pluginsFile) ? readFileSync(pluginsFile).byteLength : 0,
+    // 近 20MB 的快照：取体积用 stat，别为了 byteLength 把整个文件读进内存
+    pluginsBytes: existsSync(pluginsFile) ? statSync(pluginsFile).size : 0,
   }
+}
+
+/** 同一份文件的压缩结果缓存（键含 mtime，快照每天换一次，只压一次）。 */
+const gzipCache = new Map()
+
+function fileEtag(st) {
+  return `W/"${st.size.toString(36)}-${Math.round(st.mtimeMs).toString(36)}"`
+}
+
+/**
+ * 大 JSON 快照的读取路径：ETag 协商 + gzip。
+ *
+ * 未压缩时这个文件近 20MB，浏览器每次打开商店都要重下一遍再 parse；gzip 后约
+ * 3.6MB，而命中 ETag 时只回 304。压缩走 zlib 的异步接口，不占宿主事件循环。
+ */
+async function serveSnapshot(req, res, file, contentType) {
+  let st
+  try {
+    st = statSync(file)
+  } catch (e) {
+    sendJson(res, 404, { error: 'data file unavailable' })
+    return
+  }
+  const etag = fileEtag(st)
+  if (String(req.headers['if-none-match'] || '').includes(etag)) {
+    res.writeHead(304, { etag, 'cache-control': 'no-cache' })
+    res.end()
+    return
+  }
+  const acceptsGzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))
+  const base = { etag, 'cache-control': 'no-cache', 'content-type': contentType, vary: 'Accept-Encoding' }
+  if (!acceptsGzip) {
+    const body = readFileSync(file)
+    res.writeHead(200, { ...base, 'content-length': String(body.byteLength) })
+    res.end(body)
+    return
+  }
+  const key = `${file}|${etag}`
+  let zipped = gzipCache.get(key)
+  if (!zipped) {
+    zipped = await new Promise((resolve, reject) => {
+      gzip(readFileSync(file), { level: 6 }, (err, out) => (err ? reject(err) : resolve(out)))
+    }).catch((e) => {
+      console.warn('[dsh-store-market] gzip failed, serving raw', e)
+      return null
+    })
+    if (zipped) {
+      // 只留最新一份，避免旧快照的压缩结果常驻
+      gzipCache.clear()
+      gzipCache.set(key, zipped)
+    }
+  }
+  if (!zipped) {
+    const body = readFileSync(file)
+    res.writeHead(200, { ...base, 'content-length': String(body.byteLength) })
+    res.end(body)
+    return
+  }
+  res.writeHead(200, { ...base, 'content-encoding': 'gzip', 'content-length': String(zipped.byteLength) })
+  res.end(zipped)
 }
 
 /** 商店 UI 页面（site/index.html） */
@@ -320,7 +382,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.6',
+        version: '0.1.7',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -458,8 +520,7 @@ export function apply(ctx, config = {}) {
     route('GET', '/dsh-store/data/plugins.json', async (req, res) => {
       const local = localDataFiles()
       if (local.plugins) {
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache' })
-        res.end(readFileSync(local.plugins))
+        await serveSnapshot(req, res, local.plugins, 'application/json; charset=utf-8')
         return
       }
       const controller = new AbortController()
@@ -467,8 +528,20 @@ export function apply(ctx, config = {}) {
       try {
         const remote = await fetch(DATA_URL, { signal: controller.signal })
         if (!remote.ok) throw new Error(`HTTP ${remote.status}`)
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache' })
-        res.end(await remote.text())
+        const body = Buffer.from(await remote.arrayBuffer())
+        const base = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache', vary: 'Accept-Encoding' }
+        if (/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+          const zipped = await new Promise((resolve, reject) =>
+            gzip(body, { level: 6 }, (err, out) => (err ? reject(err) : resolve(out)))
+          ).catch(() => null)
+          if (zipped) {
+            res.writeHead(200, { ...base, 'content-encoding': 'gzip', 'content-length': String(zipped.byteLength) })
+            res.end(zipped)
+            return
+          }
+        }
+        res.writeHead(200, { ...base, 'content-length': String(body.byteLength) })
+        res.end(body)
       } catch (e) {
         sendJson(res, 502, { error: 'no bundled data and remote fetch failed', detail: String(e?.message || e) })
       } finally {
