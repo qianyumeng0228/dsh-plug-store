@@ -227,12 +227,67 @@ function paintStorefront(svg) {
  * touched, and the flag plus a re-check on every mutation keep a locale switch or
  * a shell re-render from leaving the label and the glyph disagreeing.
  */
+/**
+ * 把一行的构成写清楚。
+ *
+ * 上一版上报的是「插入之后」的 innerHTML 前 240 字，结果那 240 字全被我们自己
+ * 插进去的 svg 占满了，宿主的符号到底画在哪儿一点没看见 —— 上报要是有用，
+ * 就得先看清敌人长什么样。这里改成结构化的 children + 行自身的 ::before。
+ */
+function describeNavRow(el) {
+  if (!el) return null
+  const kids = []
+  for (const kid of el.children) {
+    let cs
+    try { cs = getComputedStyle(kid) } catch (e) { continue }
+    kids.push({
+      tag: String(kid.tagName).toLowerCase(),
+      cls: String(kid.getAttribute('class') || '').slice(0, 60),
+      text: normalizeText(kid.textContent).slice(0, 24),
+      display: cs.display,
+      bg: cs.backgroundImage && cs.backgroundImage !== 'none' ? cs.backgroundImage.slice(0, 70) : null,
+      mask: (cs.maskImage || cs.webkitMaskImage || 'none') !== 'none' ? 'yes' : null,
+    })
+  }
+  let before = null
+  try {
+    const bs = getComputedStyle(el, '::before')
+    before = {
+      content: bs.content === 'none' ? null : String(bs.content).slice(0, 24),
+      bg: bs.backgroundImage && bs.backgroundImage !== 'none' ? bs.backgroundImage.slice(0, 70) : null,
+      mask: (bs.maskImage || bs.webkitMaskImage || 'none') !== 'none' ? 'yes' : null,
+      w: bs.width, h: bs.height,
+    }
+  } catch (e) { /* ignore */ }
+  return { tag: String(el.tagName).toLowerCase(), cls: String(el.className || '').slice(0, 60), kids, before }
+}
+
+/** 邻行（宿主自己或别的插件的行）长什么样，是判断「图标该怎么给」的最好参照。 */
+function findRowByLabel(label) {
+  for (const sel of NAV_ROW_SELECTORS) {
+    let list
+    try { list = document.querySelectorAll(sel) } catch (e) { continue }
+    if (!list.length) continue
+    for (const el of list) {
+      if (labelMatches(navRowLabel(el), label) || labelMatches(normalizeText(el.textContent), label)) return el
+    }
+  }
+  return null
+}
+
 function installSettingsNavIcon(ctx, resolveLabel) {
   if (typeof document === 'undefined') return
   ctx.effect(() => {
     let disposed = false
     let scheduled = false
     let lastReport = ''
+    // 宿主的符号可能画在行自己的 ::before 上，藏子元素没用；只能给它让位。
+    // 规则只作用于我们打过标记的行，不碰别的行。
+    const styleTag = document.createElement('style')
+    styleTag.dataset.plugin = 'dsh-store-market'
+    styleTag.textContent =
+      '[data-dsh-store-hide-before]::before{content:none!important;display:none!important;width:0!important;height:0!important;background-image:none!important;-webkit-mask-image:none!important;mask-image:none!important}'
+    document.head.appendChild(styleTag)
     const report = (snapshot) => {
       const json = JSON.stringify(snapshot)
       if (json === lastReport) return
@@ -266,6 +321,7 @@ function installSettingsNavIcon(ctx, resolveLabel) {
       for (const stale of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) {
         if (stale === row) continue
         stale.removeAttribute(NAV_ICON_FLAG)
+        stale.removeAttribute('data-dsh-store-hide-before')
         const inserted = stale.querySelector('svg[data-dsh-store-inserted]')
         if (inserted) stale.removeChild(inserted)
         else {
@@ -279,13 +335,13 @@ function installSettingsNavIcon(ctx, resolveLabel) {
       }
       const svg = row ? row.querySelector('svg') : null
       if (row && !svg) {
-        // 回退符号不是 svg（这个宿主的实测就是这样：nav button 命中 26 行、
-        // 我们那一行 matched，但行内没有 svg）。插自己的进去，并把行里那个
-        // 不带文本的前导元素（图标位）藏掉，否则两个符号并排更难看。
-        const already = row.querySelector('svg[data-dsh-store-inserted]')
-        if (!already) {
+        // 先记下插入之前的样子，否则上报里全是自己的节点，看不到宿主的符号
+        const desc = describeNavRow(row)
+        // 插件市场 那一行是现成的参照：它显示正常，照它抄就知道图标该怎么给
+        const marketDesc = describeNavRow(findRowByLabel('插件市场'))
+        const glyphIsBefore = !!(desc && desc.before && (desc.before.bg || desc.before.mask))
+        if (!row.querySelector('svg[data-dsh-store-inserted]')) {
           for (const kid of row.children) {
-            // SVG 元素在 HTML 文档里 tagName 是小写 'svg'
             if (String(kid.tagName).toLowerCase() === 'svg') continue
             if (normalizeText(kid.textContent) === '') {
               kid.setAttribute('data-dsh-store-hidden', '1')
@@ -293,12 +349,13 @@ function installSettingsNavIcon(ctx, resolveLabel) {
               break
             }
           }
+          // 宿主的符号画在行自己的 ::before 上时，藏子元素没用，得给它让位
+          if (glyphIsBefore) row.setAttribute('data-dsh-store-hide-before', '1')
           row.insertBefore(buildStorefrontSvg(16), row.firstChild)
           row.setAttribute(NAV_ICON_FLAG, 'store')
         }
         report({ label: wanted, scopes, matched: true, hasSvg: false, inserted: true,
-          rowTag: row.tagName, rowClass: String(row.className || '').slice(0, 80),
-          rowHtmlHead: String(row.innerHTML).slice(0, 240) })
+          glyphIsBefore: !!glyphIsBefore, desc: desc, marketDesc: marketDesc })
         return
       }
       if (row && svg) {
@@ -337,6 +394,7 @@ function installSettingsNavIcon(ctx, resolveLabel) {
       clearInterval(timer)
       for (const row of document.querySelectorAll('[' + NAV_ICON_FLAG + ']')) {
         row.removeAttribute(NAV_ICON_FLAG)
+        row.removeAttribute('data-dsh-store-hide-before')
         const inserted = row.querySelector('svg[data-dsh-store-inserted]')
         if (inserted) row.removeChild(inserted)
         for (const hidden of row.querySelectorAll('[data-dsh-store-hidden]')) {
@@ -344,6 +402,7 @@ function installSettingsNavIcon(ctx, resolveLabel) {
           hidden.removeAttribute('data-dsh-store-hidden')
         }
       }
+      styleTag.remove()
     }
   }, 'dsh-store-market: settings nav icon')
 }

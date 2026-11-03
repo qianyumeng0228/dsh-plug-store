@@ -392,7 +392,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.12',
+        version: '0.1.13',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -528,10 +528,10 @@ export function apply(ctx, config = {}) {
         matched: !!(body && body.matched),
         hasSvg: !!(body && body.hasSvg),
         inserted: !!(body && body.inserted),
-        // 上一版这里按固定字段重建，把客户端传来的 rowHtmlHead 丢了，
-        // 结果最有信息量的那一个字段没落下来。原样带上现场。
-        rowTag: String((body && body.rowTag) || '').slice(0, 30),
-        rowClass: String((body && body.rowClass) || '').slice(0, 120),
+        glyphIsBefore: !!(body && body.glyphIsBefore),
+        // 现场结构原样带出：上一版按固定字段重建，把最有信息量的那个字段丢了
+        desc: body && body.desc ? body.desc : null,
+        marketDesc: body && body.marketDesc ? body.marketDesc : null,
         rowHtmlHead: String((body && body.rowHtmlHead) || '').slice(0, 300),
         rows: rows.map((r) => String(r).slice(0, 40)),
       }
