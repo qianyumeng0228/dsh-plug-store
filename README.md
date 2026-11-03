@@ -54,6 +54,13 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.4）
+
+- [x] 已安装页纳入目录外依赖：本机 32 项依赖中 6 项目录里没有（`@deepseek-ai/dsh-subagent-*`、`@linxin666/…`、`@openviking/…`、`file:` 的 dsh-model-full、以及本插件自身），此前完全不显示、无法管理；现合成条目列出并可卸载
+- [x] 主按钮反映本机状态：未装→安装；已装且有新版→更新；已装无新版→已安装（点击卸载，二次确认）；目录外依赖→卸载。静态站仍是复制命令
+- [x] 卸载发的是本机真实依赖键（目录名 `yujunzhixue-dsh-purge` → 依赖键 `dsh-purge`）
+- [x] 徽标几何关于 x=32 严格对称、墨迹垂直居中；256/64/34px 实测墨迹中心与方块中心偏差 0.00
+
 ## 已验证（0.1.2）
 
 - [x] 17 条 Node 直驱断言：伪造 `webServer` 注册路由后逐个调用，覆盖守卫（缺头 403 / 非回环 Host 403 / installed 与 backup 同样受限）、profile 从 `profiles/desktop/node_modules/...` 推导为 `desktop`、installed 名字数组 + 明细、github 只给仓库名 400、带 `owner/repo` 时 CLI 参数为 `github:owner/repo`、npm 作用域名原样透传、`-` 开头值被拒、git 更新不带 name 不再 400、商店页不要求自定义头、方法不符 405
