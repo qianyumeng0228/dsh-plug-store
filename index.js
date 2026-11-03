@@ -6,7 +6,7 @@
  * 零运行时依赖；仅依赖宿主提供的 webServer 服务。
  */
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { gzip } from 'node:zlib'
@@ -267,12 +267,75 @@ function installPlan(body) {
 function localDataFiles() {
   const dir = join(bundleDirOfSelf(), 'site', 'data')
   const pluginsFile = join(dir, 'plugins.json')
+  const cache = cacheDataFile()
+  const age = cacheAgeMs(cache)
+  let cacheBytes = 0
+  try {
+    cacheBytes = statSync(cache).size
+  } catch { /* 还没缓存过 */ }
   return {
     dir,
     plugins: existsSync(pluginsFile) ? pluginsFile : null,
     // 近 20MB 的快照：取体积用 stat，别为了 byteLength 把整个文件读进内存
     pluginsBytes: existsSync(pluginsFile) ? statSync(pluginsFile).size : 0,
+    cache,
+    cacheAgeHours: age === Infinity ? null : Math.round((age / 3600000) * 10) / 10,
+    cacheFresh: age < CACHE_TTL_MS,
+    cacheBytes,
   }
+}
+
+/**
+ * 线上快照的本机缓存，放 ~/.dsh/store-data/ —— **不能**放插件目录：
+ * 一是 node_modules 下的文件会被下一次 pnpm 操作整体还原（见 HANDOFF §1），
+ * 二是打包进仓库的快照是死的，CI 每天新翻出来的中文永远到不了本机，
+ * 页面横幅那句「每日与线上同步」也就一直是假的。
+ */
+const CACHE_TTL_MS = 24 * 3600 * 1000
+
+function cacheDataFile() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, 'store-data', 'plugins.json')
+}
+
+function cacheAgeMs(file) {
+  try {
+    return Date.now() - statSync(file).mtimeMs
+  } catch {
+    return Infinity
+  }
+}
+
+let dataFetchInFlight = null
+
+/** 后台刷新缓存：先写 .tmp 再改名，避免半截文件被当成完整快照发出去。 */
+function refreshDataCache() {
+  if (dataFetchInFlight) return dataFetchInFlight
+  dataFetchInFlight = (async () => {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 60000)
+      const remote = await fetch(DATA_URL, { signal: controller.signal })
+      clearTimeout(timer)
+      if (!remote.ok) throw new Error(`HTTP ${remote.status}`)
+      const buf = Buffer.from(await remote.arrayBuffer())
+      if (buf.length < 4096) throw new Error(`响应仅 ${buf.length} 字节，疑似被截断`)
+      const file = cacheDataFile()
+      mkdirSync(dirname(file), { recursive: true })
+      const tmp = `${file}.${process.pid}.tmp`
+      writeFileSync(tmp, buf)
+      renameSync(tmp, file)
+      return true
+    } catch (e) {
+      try {
+        console.warn('[dsh-store-market] 数据缓存刷新失败，继续用本机快照：', (e && e.message) || e)
+      } catch { /* 宿主未接日志也别炸 */ }
+      return false
+    } finally {
+      dataFetchInFlight = null
+    }
+  })()
+  return dataFetchInFlight
 }
 
 /** 同一份文件的压缩结果缓存（键含 mtime，快照每天换一次，只压一次）。 */
@@ -400,7 +463,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.18',
+        version: '0.1.19',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -593,9 +656,19 @@ export function apply(ctx, config = {}) {
     })
 
     route('GET', '/dsh-store/data/plugins.json', async (req, res) => {
+      const cache = cacheDataFile()
+      const age = cacheAgeMs(cache)
       const local = localDataFiles()
-      if (local.plugins) {
-        await serveSnapshot(req, res, local.plugins, 'application/json; charset=utf-8')
+      if (age < CACHE_TTL_MS) {
+        await serveSnapshot(req, res, cache, 'application/json; charset=utf-8')
+        return
+      }
+      // 缓存过期也先立刻回数据（首屏不该等 20MB 下载），同时后台拉新版，
+      // 下一次打开商店就是线上最新的。缓存与内置快照都没有才同步等远端。
+      const stale = age !== Infinity ? cache : local.plugins
+      if (stale) {
+        refreshDataCache()
+        await serveSnapshot(req, res, stale, 'application/json; charset=utf-8')
         return
       }
       const controller = new AbortController()
@@ -604,6 +677,12 @@ export function apply(ctx, config = {}) {
         const remote = await fetch(DATA_URL, { signal: controller.signal })
         if (!remote.ok) throw new Error(`HTTP ${remote.status}`)
         const body = Buffer.from(await remote.arrayBuffer())
+        try {
+          mkdirSync(dirname(cache), { recursive: true })
+          const tmp = `${cache}.${process.pid}.tmp`
+          writeFileSync(tmp, body)
+          renameSync(tmp, cache)
+        } catch { /* 缓存写不进去不影响本次响应 */ }
         const base = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache', vary: 'Accept-Encoding' }
         if (/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
           const zipped = await new Promise((resolve, reject) =>
