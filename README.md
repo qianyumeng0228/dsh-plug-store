@@ -54,6 +54,13 @@ dsh-store-market/
 └── client-src/         # 客户端源码（esbuild 打包）
 ```
 
+## 已验证（0.1.13）
+
+- [x] 0.1.12 的上报证明我们那一行**确实被改到了**（`inserted: true`，行内已有我们的 svg），但用户仍看到立方体 —— 说明宿主的符号不是子元素，我们没碰它。而那一版上报里 `rowHtmlHead` 的前 240 字**全被自己插入的节点占满**，等于什么都没看见。改成在插入**之前**抓结构：`describeNavRow()` 输出行标签、class、每个子元素的 tag/class/文本/display/background-image/mask，外加行自身 `::before` 的 content/尺寸/mask
+- [x] 同时把参照物抓回来：`marketDesc` 上报 插件市场 那一行的同样结构 —— 它显示正常，照它抄就知道图标到底该怎么给
+- [x] 宿主的符号画在行自己的 `::before` 上时，藏子元素没用。现检测 `::before` 是否带 background/mask，是则给该行打 `data-dsh-store-hide-before`，用一条**只作用于我们自己行**的规则把它 `content:none / display:none / width:0` 归零；卸载时摘属性、样式表随 `ctx.effect` 移除
+- [x] 复现「符号在 ::before 上」的行跑真实 bundle：`glyphIsBefore: true`、属性打上、事后 `::before` 计算样式变 `content:none / display:none / width:0px`、我们的 svg 插入、只上报一次
+
 ## 已验证（0.1.12）
 
 - [x] **靠上报拿到了真实 DOM，前三版的猜测全错**。宿主里 0.1.11 自己报回来：`[role="dialog"] nav button` 命中 **0** 行（设置页是整页布局、带分组标题，根本没有 `role=dialog` 祖先），`nav button` 命中 **26** 行，我们那一行 `matched: true` —— 但 **`hasSvg: false`**：这个宿主的回退符号**不是 `<svg>`**。所以前三版「改写回退 svg」的路径从来没执行到，图标自然出不来
