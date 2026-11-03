@@ -212,6 +212,290 @@ function readInstalled(profile) {
   }
 }
 
+/**
+ * 流式跑 dsh CLI：逐行喂给 onLine，用于把 pnpm 的 `--reporter=ndjson` 事件
+ * 实时转成任务进度。runDsh 是等跑完才返回，做不了进度条。
+ */
+function runDshStream(args, onLine, opts = {}) {
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let child
+    const inv = dshInvocation()
+    const emitLines = (buf, sink) => {
+      let i
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i)
+        buf = buf.slice(i + 1)
+        if (line.trim()) {
+          try { onLine(line, sink) } catch { /* 解析器出错不能影响子进程收尾 */ }
+        }
+      }
+      return buf
+    }
+    let outBuf = ''
+    let errBuf = ''
+    try {
+      child = spawn(inv.file, [...inv.args, ...args], {
+        windowsHide: true,
+        cwd: opts.cwd,
+        env: { ...process.env },
+      })
+    } catch (e) {
+      resolve({ code: -1, stdout: '', stderr: String(e) })
+      return
+    }
+    const timer = setTimeout(() => {
+      try { child.kill() } catch { /* noop */ }
+    }, opts.timeout || 120000)
+    child.stdout?.on('data', (d) => {
+      const s = String(d)
+      stdout += s
+      outBuf = emitLines(outBuf + s, 'stdout')
+    })
+    child.stderr?.on('data', (d) => {
+      const s = String(d)
+      stderr += s
+      errBuf = emitLines(errBuf + s, 'stderr')
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (outBuf.trim()) { try { onLine(outBuf, 'stdout') } catch { /* noop */ } }
+      if (errBuf.trim()) { try { onLine(errBuf, 'stderr') } catch { /* noop */ } }
+      resolve({ code, stdout, stderr })
+    })
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      resolve({ code: -1, stdout, stderr: String(e) })
+    })
+  })
+}
+
+/* ---------- 插件操作任务队列 ----------
+ * 串行：同一个 profile 目录并发跑两个 pnpm 会互踩（store 锁、package.json 原子写），
+ * 所以服务端排队，前端只负责把每条任务实时显示出来。
+ * 进度：pnpm 的 ndjson 流里**没有总数**，百分比按阶段估算并封顶 96，进程退出才置 100；
+ * 界面把它当"阶段指示"，别谎称是精确下载进度。 */
+const TASK_CAP = 60
+const tasks = []
+let taskSeq = 0
+let queueTail = Promise.resolve()
+
+const PHASE_ZH = {
+  resolving: '解析依赖',
+  downloading: '下载包',
+  linking: '链接进 profile',
+  building: '执行构建脚本',
+}
+const PHASE_PCT = { resolving: 15, downloading: 55, linking: 82, building: 90 }
+
+/** pnpm 的 message 会随版本改词，code 才是稳定判据，所以按 code 给中文解释。 */
+const ERR_HINTS = {
+  ERR_PNPM_FETCH_404: '包不存在或你没有权限拉取（registry 404）',
+  ERR_PNPM_FETCH_401: 'registry 要求认证（401），私有包需要先配 token',
+  ERR_PNPM_FETCH_403: 'registry 拒绝访问（403）',
+  ERR_PNPM_UNEXPECTED_STORE: 'pnpm store 路径与 profile 不一致，换 store 或去掉离线设置',
+  ERR_PNPM_NO_OFFLINE: '离线模式下取不到这个包',
+  ERR_PNPM_PEER_DEP_ISSUES: '对等依赖（peer）冲突，多半是插件自身声明问题',
+  ERR_PNPM_OUTDATED_LOCKFILE: 'lockfile 与 package.json 不一致',
+  ERR_PNPM_LOCKFILE_BREAKING_CHANGE: 'lockfile 版本与当前 pnpm 不兼容',
+  ERR_PNPM_GIT_REPO_NOT_FOUND: 'GitHub 仓库不存在或已改名（git 源可能要重新收录）',
+  EACCES: '文件被占用或没有写权限（Windows 上常见于 DSH 正持有该文件）',
+  EPERM: '文件被占用或没有写权限',
+  ENOTFOUND: '域名解析失败，检查网络或代理',
+  EAI_AGAIN: '网络抖动（DNS 临时失败），可直接重试',
+  ETIMEDOUT: '网络超时，可直接重试',
+}
+
+function newTask(kind, plan) {
+  const t = {
+    id: ++taskSeq,
+    kind,
+    name: plan.target,
+    spec: plan.arg,
+    state: 'queued',
+    phase: null,
+    phaseText: '排队中',
+    percent: 0,
+    done: 0,
+    detail: '',
+    error: '',
+    errorCode: '',
+    hint: '',
+    logFile: '',
+    from: '',
+    to: '',
+    changed: false,
+    applied: null,
+    note: '',
+    startedAt: null,
+    endedAt: null,
+  }
+  tasks.push(t)
+  if (tasks.length > TASK_CAP) {
+    const first = tasks.findIndex((x) => x.state === 'done' || x.state === 'failed')
+    if (first >= 0) tasks.splice(first, 1)
+  }
+  return t
+}
+
+function feedTaskLine(task, line) {
+  const s = String(line).trim()
+  if (!s) return
+  const log = s.match(/diagnostics:\s*(\S+\.log)/)
+  if (log) {
+    task.logFile = log[1]
+    return
+  }
+  let ev
+  try {
+    ev = JSON.parse(s)
+  } catch {
+    return // 人读输出（非 ndjson）忽略，进度靠结构化事件
+  }
+  if (!ev || typeof ev !== 'object') return
+  const name = ev.name
+  if (name === 'pnpm:stage') {
+    const st = ev.stage
+    if (st === 'resolution_started') setTaskPhase(task, 'resolving')
+    else if (st === 'resolution_done') setTaskPhase(task, 'downloading')
+    else if (st === 'importing_started' || st === 'importing_done') setTaskPhase(task, 'linking')
+    return
+  }
+  if (name === 'pnpm:progress') {
+    if (ev.status === 'resolved') {
+      if (!task.phase) setTaskPhase(task, 'resolving')
+      countPackage(task, ev.packageId)
+    } else if (ev.status === 'fetched' || ev.status === 'found_in_store') {
+      setTaskPhase(task, 'downloading')
+      countPackage(task, ev.packageId)
+    }
+    return
+  }
+  if (name === 'pnpm:fetching-progress') {
+    setTaskPhase(task, 'downloading')
+    countPackage(task, ev.packageId)
+    if (typeof ev.size === 'number' && ev.size > 0) {
+      const pct = Math.min(96, 20 + Math.round((Number(ev.downloaded) || 0) / ev.size * 35))
+      if (pct > task.percent) task.percent = pct
+    }
+    return
+  }
+  if (name === 'pnpm:lifecycle') {
+    setTaskPhase(task, 'building')
+    return
+  }
+  if (name === 'pnpm:stats') {
+    if (ev.added !== undefined || ev.removed !== undefined) setTaskPhase(task, 'linking')
+    return
+  }
+  if (name === 'pnpm' && ev.level === 'error') {
+    const err = ev.err || {}
+    if (err.message) task.error = String(err.message).slice(0, 600)
+    const code = String(ev.code || err.code || '')
+    if (code) {
+      task.errorCode = code
+      task.hint = ERR_HINTS[code] || ''
+    }
+    if (ev.hint) task.detail = String(ev.hint).split('\n')[0].slice(0, 300)
+  }
+}
+
+const seenByTask = new WeakMap()
+function countPackage(task, packageId) {
+  if (typeof packageId !== 'string' || !packageId) return
+  let set = seenByTask.get(task)
+  if (!set) {
+    set = new Set()
+    seenByTask.set(task, set)
+  }
+  if (!set.has(packageId)) {
+    set.add(packageId)
+    task.done = set.size
+  }
+}
+
+function setTaskPhase(task, phase) {
+  task.phase = phase
+  task.phaseText = PHASE_ZH[phase] || phase
+  const base = PHASE_PCT[phase] || 5
+  // 包数多时按已处理包数往上顶，但绝不越过本阶段上界，避免"100% 却还在跑"
+  const nudge = Math.min(8, Math.floor(task.done / 3))
+  task.percent = Math.max(task.percent, Math.min(96, base + nudge))
+}
+
+function bundlesOf(profileName) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(profileDir(profileName), 'package.json'), 'utf8'))
+    const b = pkg?.dsh?.profile?.bundles
+    return Array.isArray(b) ? b : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 装完到底要不要重启：桌面端 profile HMR 默认开着（dsh-base 的 hmr 条目只在
+ * 拿不到 profileContext 时才 disabled），它用 chokidar 盯 profile 的 package.json，
+ * `dsh.profile.bundles` 一变就 reconcileProfile 实时装载。所以判据是
+ * "这个包有没有进 bundles"，而不是无脑喊重启。
+ */
+function applyVerdict(profileName, kind, name) {
+  const inBundles = bundlesOf(profileName).includes(name)
+  if (kind === 'uninstall') {
+    return {
+      applied: 'live',
+      note: '已从 profile 移除，HMR 会自动重载；已加载的模块可能仍驻留内存，要彻底干净请重启',
+    }
+  }
+  if (inBundles) {
+    return { applied: 'live', note: '已写入 profile bundles，HMR 约 2 秒内实时生效，无需重启' }
+  }
+  return { applied: 'restart', note: '未进入 profile bundles（该包没声明 dsh.bundle），需重启 DSH 才生效' }
+}
+
+function depVersionOf(profileName, plan) {
+  const repo = plan.source === 'github' ? String(plan.target).toLowerCase() : ''
+  const e = readInstalled(profileName).find((x) => x.name === plan.target ||
+    (repo && x.repo && String(x.repo).toLowerCase() === repo))
+  return e ? String(e.version) : ''
+}
+
+function runTask(task, args) {
+  task.state = 'running'
+  task.startedAt = new Date().toISOString()
+  return runDshStream(args, (line) => feedTaskLine(task, line), { timeout: 900000 })
+    .then((result) => {
+      task.endedAt = new Date().toISOString()
+      task.percent = 100
+      task.code = result.code
+      if (result.code === 0) {
+        task.state = 'done'
+        task.phaseText = '完成'
+      } else {
+        task.state = 'failed'
+        task.phaseText = '失败'
+        if (!task.error) {
+          const tail = String(result.stderr || result.stdout || '').trim().split('\n').filter(Boolean).slice(-3)
+          task.error = tail.join(' / ').slice(0, 600) || `CLI 退出码 ${result.code}`
+        }
+      }
+      return result
+    })
+}
+
+/** 排队执行：同一时刻只有一个 pnpm 在跑，后来的任务在面板里显示"排队中"。 */
+function enqueueTask(task, args) {
+  const run = queueTail.then(() => runTask(task, args))
+  queueTail = run.then(() => {}, () => {})
+  return run
+}
+
+function taskSummary() {
+  const active = tasks.filter((t) => t.state === 'queued' || t.state === 'running').length
+  return { tasks: tasks.slice(-40), active }
+}
+
 function bundleDirOfSelf() {
   return dirname(fileURLToPath(import.meta.url))
 }
@@ -463,9 +747,9 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.19',
+        version: '0.1.20',
         profile,
-        capabilities: ['installed', 'install', 'uninstall', 'update', 'diagnose', 'backup', 'proxy-data'],
+        capabilities: ['installed', 'install', 'uninstall', 'update', 'tasks', 'diagnose', 'backup', 'proxy-data'],
         data: {
           bundled: local.plugins !== null,
           bundledBytes: local.pluginsBytes,
@@ -500,15 +784,19 @@ export function apply(ctx, config = {}) {
         sendJson(res, 400, { error: 'invalid plugin identifier', hint: 'npm 源要包名，github 源要 owner/repo' })
         return
       }
-      const result = await runDsh(['plugin', '--profile', profile, 'add', plan.arg], { timeout: 300000 })
-      sendJson(res, result.code === 0 ? 200 : 500, {
-        source: plan.source,
-        target: plan.arg,
-        ok: result.code === 0,
-        code: result.code,
-        output: (result.stdout + result.stderr).slice(-8000),
-        note: result.code === 0 ? '已安装，重启 DSH（或重载 profile）后生效' : '安装失败，详见 output',
-      })
+      const task = newTask('install', plan)
+      // 立刻回 202：真实结果由前端轮 api/tasks 收敛。原先要等 CLI 跑完（1~3 分钟）
+      // 才有响应，既做不了进度，也容易被当成"点了没反应"。
+      sendJson(res, 202, { accepted: true, taskId: task.id, state: task.state, name: task.name })
+      enqueueTask(task, ['plugin', '--profile', profile, 'add', plan.arg, '--reporter=ndjson'])
+        .then(() => {
+          if (task.state === 'done') {
+            const v = applyVerdict(profile, 'install', plan.target)
+            task.applied = v.applied
+            task.note = v.note
+          }
+        })
+        .catch(() => {})
     })
 
     route('POST', '/dsh-store/api/uninstall', async (req, res) => {
@@ -524,14 +812,17 @@ export function apply(ctx, config = {}) {
         sendJson(res, 400, { error: 'missing or invalid name' })
         return
       }
-      const result = await runDsh(['plugin', '--profile', profile, 'remove', name], { timeout: 300000 })
-      sendJson(res, result.code === 0 ? 200 : 500, {
-        name,
-        ok: result.code === 0,
-        code: result.code,
-        output: (result.stdout + result.stderr).slice(-8000),
-        note: result.code === 0 ? '已卸载' : '卸载失败，详见 output',
-      })
+      const task = newTask('uninstall', { target: name, arg: name })
+      sendJson(res, 202, { accepted: true, taskId: task.id, state: task.state, name })
+      enqueueTask(task, ['plugin', '--profile', profile, 'remove', name, '--reporter=ndjson'])
+        .then(() => {
+          if (task.state === 'done') {
+            const v = applyVerdict(profile, 'uninstall', name)
+            task.applied = v.applied
+            task.note = v.note
+          }
+        })
+        .catch(() => {})
     })
 
     route('POST', '/dsh-store/api/update', async (req, res) => {
@@ -547,35 +838,31 @@ export function apply(ctx, config = {}) {
         sendJson(res, 400, { error: 'invalid plugin identifier', hint: 'npm 源要包名（可带 version），github 源要 owner/repo（可带 ref）' })
         return
       }
+      const task = newTask('update', plan)
       // 更新是否真的发生，只能回读 package.json 里的依赖版本：pnpm 判定"已是最新"时
       // 退出码同样是 0，光看退出码就会把空转报成成功（这正是"更新没反应"的由来）。
-      const depVersion = (list) => {
-        const repo = plan.source === 'github' ? plan.target.toLowerCase() : ''
-        const e = list.find((x) => x.name === plan.target ||
-          (repo && x.repo && String(x.repo).toLowerCase() === repo))
-        return e ? String(e.version) : ''
+      task.from = depVersionOf(profile, plan)
+      sendJson(res, 202, { accepted: true, taskId: task.id, state: task.state, name: task.name })
+      enqueueTask(task, ['plugin', '--profile', profile, 'add', plan.arg, '--reporter=ndjson'])
+        .then(() => {
+          if (task.state !== 'done') return
+          task.to = depVersionOf(profile, plan)
+          task.changed = !!task.to && task.to !== task.from
+          const v = applyVerdict(profile, 'update', plan.target)
+          task.applied = v.applied
+          task.note = task.changed
+            ? `已更新 ${task.from || '（原先未装）'} → ${task.to}；${v.note}`
+            : `版本未变化（本机 ${task.from || '未知'}），pnpm 判定已是最新；若确需升级请核对目录里的目标版本`
+        })
+        .catch(() => {})
+    })
+
+    route('GET', '/dsh-store/api/tasks', (req, res) => {
+      try {
+        sendJson(res, 200, taskSummary())
+      } catch (e) {
+        sendJson(res, 500, { error: String(e?.message || e) })
       }
-      const from = depVersion(readInstalled(profile))
-      const result = await runDsh(['plugin', '--profile', profile, 'add', plan.arg], { timeout: 300000 })
-      const to = depVersion(readInstalled(profile))
-      const changed = !!to && to !== from
-      const code = result.code
-      sendJson(res, code === 0 ? 200 : 500, {
-        name: plan.target,
-        source: plan.source,
-        target: plan.arg,
-        ok: code === 0,
-        code,
-        from,
-        to,
-        changed,
-        output: (result.stdout + result.stderr).slice(-8000),
-        note: code !== 0
-          ? '更新失败，详见 output'
-          : changed
-            ? `已更新 ${from || '（原先未装）'} → ${to}，重启后生效`
-            : `版本未变化（本机 ${from || '未知'}），pnpm 判定已是最新；若确需升级请核对目录里的目标版本`,
-      })
     })
 
     route('GET', '/dsh-store/api/diagnose', async (req, res) => {
