@@ -27,6 +27,9 @@ dsh plugin --profile <profile> add dsh-plug-store
 dsh plugin --profile <profile> add github:qianyumeng0228/dsh-plug-store
 ```
 
+> **npm 目前只发布到 0.1.21。** GitHub 源码始终是最新的，且多带最近五次修复；
+> npm 追上之前建议用上面的 `github:` 形式。
+
 装完重启宿主；也可以不重启——本插件声明了 bundle，profile 的 HMR 会通过 `dsh.bundle.patch`
 把它热加载进去。
 
