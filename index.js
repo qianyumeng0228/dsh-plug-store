@@ -100,7 +100,7 @@ function profileDir(profile) {
 
 /**
  * 本插件自身的安装路径 -> 宿主实际加载它的 profile。
- * 路径形如 ~/.dsh/profiles/<profile>/node_modules/dsh-store-market/index.js，
+ * 路径形如 ~/.dsh/profiles/<profile>/node_modules/dsh-app-store/index.js，
  * 桌面端里 DSH_PROFILE 是 'desktop'，早先的实现把它当无效值丢掉、硬回落 'web'，
  * 导致在桌面端装插件却写进 web profile，界面里看不到、已装列表也不对。
  */
