@@ -1,4 +1,4 @@
 # dsh bundle patch: inserts this plugin into a profile's layer stack.
 - insert:
-    - id: dsh-app-store
-      name: 'dsh-app-store'
+    - id: dsh-plug-store
+      name: 'dsh-plug-store'

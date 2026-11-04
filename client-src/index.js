@@ -1,5 +1,5 @@
 /**
- * dsh-app-store client bundle
+ * dsh-plug-store client bundle
  * Registers a "插件商店" settings section, a Plugins-page tab, and a
  * left-sidebar row + main panel (the dshmarket-style entry the user asked
  * for) that embeds the host-served store UI at /dsh-store/ in an iframe.
@@ -16,10 +16,10 @@
 
 import React from 'react'
 
-export const name = 'dsh-app-store'
+export const name = 'dsh-plug-store'
 export const inject = ['slots', 'locale']
 
-const NS = 'dsh-app-store'
+const NS = 'dsh-plug-store'
 
 function StoreFrame() {
   // iframe 撑到内容高度，滚动交给宿主设置页的内容列 —— 整页只有一条滚动条，
@@ -102,7 +102,7 @@ function createSectionGate(register, initiallyVisible = true) {
       try {
         dispose = register()
       } catch (error) {
-        console.warn('[dsh-app-store] slot register failed', error)
+        console.warn('[dsh-plug-store] slot register failed', error)
       }
       return
     }
@@ -134,7 +134,7 @@ export function apply(ctx) {
     ctx.effect(() => ctx.locale.register(NS, {
       zh: { nav: '插件商店', desc: 'DSH 插件商店 — 浏览并安装社区插件' },
       en: { nav: 'Plugin Store', desc: 'DSH Plugin Store — browse and install community plugins' },
-    }), 'dsh-app-store: dictionaries')
+    }), 'dsh-plug-store: dictionaries')
     const t = ctx.locale.bind(NS)
 
     const frame = () => React.createElement(StoreFrame)
@@ -168,6 +168,6 @@ export function apply(ctx) {
     ctx.slots.inject('settings.plugins.tab', () => tabGate.available())
 
   } catch (error) {
-    console.error('[dsh-app-store] client mount failed; store missing this session', error)
+    console.error('[dsh-plug-store] client mount failed; store missing this session', error)
   }
 }
