@@ -1,4 +1,4 @@
-window.__ModuleLoader__.load({ id: "dsh-store-market", factory: (require) => {
+window.__ModuleLoader__.load({ id: "dsh-apps", factory: (require) => {
 var __dshStoreClient = (() => {
   var __create = Object.create;
   var __defProp = Object.defineProperty;
@@ -42,9 +42,9 @@ var __dshStoreClient = (() => {
     name: () => name
   });
   var import_react = __toESM(__require("react"), 1);
-  var name = "dsh-store-market";
+  var name = "dsh-apps";
   var inject = ["slots", "locale"];
-  var NS = "dsh-store-market";
+  var NS = "dsh-apps";
   function StoreFrame() {
     const frameRef = import_react.default.useRef(null);
     import_react.default.useEffect(() => {
@@ -98,7 +98,7 @@ var __dshStoreClient = (() => {
         try {
           dispose = register();
         } catch (error) {
-          console.warn("[dsh-store-market] slot register failed", error);
+          console.warn("[dsh-apps] slot register failed", error);
         }
         return;
       }
@@ -129,7 +129,7 @@ var __dshStoreClient = (() => {
       ctx.effect(() => ctx.locale.register(NS, {
         zh: { nav: "\u63D2\u4EF6\u5546\u5E97", desc: "DSH \u63D2\u4EF6\u5546\u5E97 \u2014 \u6D4F\u89C8\u5E76\u5B89\u88C5\u793E\u533A\u63D2\u4EF6" },
         en: { nav: "Plugin Store", desc: "DSH Plugin Store \u2014 browse and install community plugins" }
-      }), "dsh-store-market: dictionaries");
+      }), "dsh-apps: dictionaries");
       const t = ctx.locale.bind(NS);
       const frame = () => import_react.default.createElement(StoreFrame);
       const sectionGate = createSectionGate(() => {
@@ -159,7 +159,7 @@ var __dshStoreClient = (() => {
       });
       ctx.slots.inject("settings.plugins.tab", () => tabGate.available());
     } catch (error) {
-      console.error("[dsh-store-market] client mount failed; store missing this session", error);
+      console.error("[dsh-apps] client mount failed; store missing this session", error);
     }
   }
   return __toCommonJS(index_exports);

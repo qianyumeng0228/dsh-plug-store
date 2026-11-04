@@ -1,5 +1,5 @@
 {
-  "name": "dsh-store-market",
+  "name": "dsh-apps",
   "description": "DSH 插件商店（宿主版）— 在 DSH 内浏览 qianyumeng0228/dsh-store 的 1.7 万+ 插件目录，真实执行安装/卸载/更新/备份/诊断。 · DSH plugin store inside DeepSeek Harness: browse the dsh-store catalog and install community plugins with real host capabilities.",
   "version": "0.1.21",
   "type": "module",
@@ -48,7 +48,7 @@
   },
   "files": [
     "index.js",
-    "site",
+    "site/index.html",
     "client",
     "cordis.patch.yml",
     "README.md",

@@ -1,4 +1,4 @@
-# DSH 插件商店（宿主版）· dsh-store-market
+# DSH 插件商店（宿主版）· dsh-apps
 
 在 DeepSeek Harness 内浏览 [qianyumeng0228/dsh-store](https://qianyumeng0228.github.io/dsh-store/) 的 1.7 万+ 插件目录，并**真实执行**安装 / 卸载 / 更新 / 备份 / 诊断——不再只是复制命令。
 
@@ -6,7 +6,7 @@
 
 ```bash
 # npm（发布后）
-dsh plugin add dsh-store-market
+dsh plugin add dsh-apps
 
 # 或 GitHub 源码（免构建，零依赖，当前推荐）
 dsh plugin --profile <profile> add github:qianyumeng0228/dsh-store-market
@@ -177,8 +177,8 @@ dsh-store-market/
 
 安装/卸载/更新与「已装」列表作用于哪个 profile，按以下顺序确定：
 
-1. `cordis.yml` 里 `plugins.dsh-store-market.profile`（显式配置优先）；
-2. **本插件自身的安装路径** `~/.dsh/profiles/<profile>/node_modules/dsh-store-market/`；
+1. `cordis.yml` 里 `plugins.dsh-apps.profile`（显式配置优先）；
+2. **本插件自身的安装路径** `~/.dsh/profiles/<profile>/node_modules/dsh-apps/`；
 3. 环境变量 `DSH_PROFILE`；
 4. 兜底 `web`。
 
@@ -192,7 +192,7 @@ dsh-store-market/
 
 ```yaml
 plugins:
-  dsh-store-market:
+  dsh-apps:
     profile: web       # 默认 web；desktop 用户改为 desktop
     # path: /dsh-store   # 路由前缀
     # dataUrl: https://qianyumeng0228.github.io/dsh-store/data/plugins.json
@@ -211,9 +211,9 @@ npx esbuild client-src/index.js --bundle --format=iife --global-name=__dshStoreC
 ## 版本发布
 
 ```bash
-npm pack            # 产出 dsh-store-market-<ver>.tgz
+npm pack            # 产出 dsh-apps-<ver>.tgz
 # 数据快照更新：cp ../dsh-store/dist/site/data/plugins.json site/data/plugins.json
-# GitHub Release 附 tgz：gh release create v<ver> dsh-store-market-<ver>.tgz
+# GitHub Release 附 tgz：gh release create v<ver> dsh-apps-<ver>.tgz
 # 用户安装：dsh plugin --profile web add <tgz-url 或 github:qianyumeng0228/dsh-store-market>
 ```
 
