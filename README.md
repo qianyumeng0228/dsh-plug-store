@@ -9,7 +9,7 @@
 dsh plugin add dsh-plug-store
 
 # 或 GitHub 源码（免构建，零依赖，当前推荐）
-dsh plugin --profile <profile> add github:qianyumeng0228/dsh-store-market
+dsh plugin --profile <profile> add github:qianyumeng0228/dsh-plug-store
 ```
 
 > 目标 profile 默认 `web`；桌面版请用应用内的插件管理器安装（或在 `--profile desktop` 下安装）。
@@ -44,7 +44,7 @@ dsh plugin --profile <profile> add github:qianyumeng0228/dsh-store-market
 ## 结构
 
 ```
-dsh-store-market/
+dsh-plug-store/
 ├── index.js            # 宿主插件：挂 /dsh-store/* 路由 + dsh CLI 子进程 API（零依赖）
 ├── cordis.patch.yml    # 插件层声明（dsh.bundle.patch）
 ├── client/client.js    # 客户端 bundle：设置页/插件页注册「插件商店」section（iframe 嵌入）
@@ -214,7 +214,7 @@ npx esbuild client-src/index.js --bundle --format=iife --global-name=__dshStoreC
 npm pack            # 产出 dsh-plug-store-<ver>.tgz
 # 数据快照更新：cp ../dsh-store/dist/site/data/plugins.json site/data/plugins.json
 # GitHub Release 附 tgz：gh release create v<ver> dsh-plug-store-<ver>.tgz
-# 用户安装：dsh plugin --profile web add <tgz-url 或 github:qianyumeng0228/dsh-store-market>
+# 用户安装：dsh plugin --profile web add <tgz-url 或 github:qianyumeng0228/dsh-plug-store>
 ```
 
 ## 边界（诚实说明）
