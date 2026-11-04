@@ -18,6 +18,16 @@ export const inject = ['webServer']
 const DATA_URL = 'https://qianyumeng0228.github.io/dsh-store/data/plugins.json'
 const INDEX_URL = 'https://qianyumeng0228.github.io/dsh-store/index.json'
 
+/** 版本取自自身 package.json：写死的话每次发版都会让能力接口和诊断页报旧版本。 */
+const PKG_VERSION = (() => {
+  try {
+    const p = join(dirname(fileURLToPath(import.meta.url)), 'package.json')
+    return String(JSON.parse(readFileSync(p, 'utf8')).version || '')
+  } catch {
+    return ''
+  }
+})()
+
 /** 宿主 data 目录：本插件安装目录内 site/data（npm 包内自带当日快照） */
 function bundledDataDir() {
   return join(dirname(fileURLToPath(import.meta.url)), 'site', 'data')
@@ -790,7 +800,7 @@ export function apply(ctx, config = {}) {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-plug-store',
-        version: '0.1.21',
+        version: PKG_VERSION,
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'tasks', 'diagnose', 'backup', 'proxy-data'],
         data: {
