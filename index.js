@@ -336,6 +336,7 @@ function newTask(kind, plan) {
     const first = tasks.findIndex((x) => x.state === 'done' || x.state === 'failed')
     if (first >= 0) tasks.splice(first, 1)
   }
+  persistTasks()
   return t
 }
 
@@ -480,6 +481,7 @@ function runTask(task, args) {
           task.error = tail.join(' / ').slice(0, 600) || `CLI 退出码 ${result.code}`
         }
       }
+      persistTasks()
       return result
     })
 }
@@ -494,6 +496,45 @@ function enqueueTask(task, args) {
 function taskSummary() {
   const active = tasks.filter((t) => t.state === 'queued' || t.state === 'running').length
   return { tasks: tasks.slice(-40), active }
+}
+
+/**
+ * 任务记录落盘。
+ * 纯内存的话，插件一旦被 profile HMR 重组（装/卸任何带 dsh.bundle 的包都会触发
+ * reconcileProfile）就整批清空 —— 用户看到的"记录有时有一会没"有相当一部分是这个。
+ * 重启前处于 queued/running 的记录无法确认真实结局，标成"已中断"而不是假装成功。
+ */
+function tasksFile() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, 'store-data', 'tasks.json')
+}
+
+function persistTasks() {
+  try {
+    const f = tasksFile()
+    mkdirSync(dirname(f), { recursive: true })
+    const tmp = `${f}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(tasks.slice(-TASK_CAP)))
+    renameSync(tmp, f)
+  } catch { /* 记录写不进去不影响插件操作本身 */ }
+}
+
+function loadTasks() {
+  try {
+    const raw = JSON.parse(readFileSync(tasksFile(), 'utf8'))
+    if (!Array.isArray(raw)) return
+    for (const t of raw) {
+      if (!t || typeof t.id !== 'number' || typeof t.kind !== 'string') continue
+      if (t.state === 'queued' || t.state === 'running') {
+        t.state = 'failed'
+        t.phaseText = '已中断'
+        t.percent = 100
+        t.error = '宿主插件在此期间重启过（profile 重组），无法确认这次操作是否跑完；请重新执行或核对 profile'
+      }
+      tasks.push(t)
+    }
+    taskSeq = tasks.reduce((m, t) => Math.max(m, t.id), 0)
+  } catch { /* 首次运行没有记录文件 */ }
 }
 
 function bundleDirOfSelf() {
@@ -743,11 +784,13 @@ export function apply(ctx, config = {}) {
     route('GET', '/dsh-store', serveUi)
     route('GET', '/dsh-store/index.html', serveUi)
 
+    loadTasks()
+
     route('GET', '/dsh-store/api/capabilities', (req, res) => {
       const local = localDataFiles()
       sendJson(res, 200, {
         name: 'dsh-store-market',
-        version: '0.1.20',
+        version: '0.1.21',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'tasks', 'diagnose', 'backup', 'proxy-data'],
         data: {
@@ -794,6 +837,7 @@ export function apply(ctx, config = {}) {
             const v = applyVerdict(profile, 'install', plan.target)
             task.applied = v.applied
             task.note = v.note
+            persistTasks()
           }
         })
         .catch(() => {})
@@ -820,6 +864,7 @@ export function apply(ctx, config = {}) {
             const v = applyVerdict(profile, 'uninstall', name)
             task.applied = v.applied
             task.note = v.note
+            persistTasks()
           }
         })
         .catch(() => {})
@@ -853,6 +898,7 @@ export function apply(ctx, config = {}) {
           task.note = task.changed
             ? `已更新 ${task.from || '（原先未装）'} → ${task.to}；${v.note}`
             : `版本未变化（本机 ${task.from || '未知'}），pnpm 判定已是最新；若确需升级请核对目录里的目标版本`
+          persistTasks()
         })
         .catch(() => {})
     })
@@ -863,6 +909,20 @@ export function apply(ctx, config = {}) {
       } catch (e) {
         sendJson(res, 500, { error: String(e?.message || e) })
       }
+    })
+
+    // 只清已结束的记录（done/failed）：正在跑或还在排队的任务不能被抹掉，
+    // 否则前端会以为它凭空消失，实际仍在改 profile。
+    route('POST', '/dsh-store/api/tasks/clear', (req, res) => {
+      const cleared = []
+      for (let i = tasks.length - 1; i >= 0; i--) {
+        if (tasks[i].state === 'done' || tasks[i].state === 'failed') {
+          cleared.push(tasks[i].id)
+          tasks.splice(i, 1)
+        }
+      }
+      persistTasks()
+      sendJson(res, 200, { ok: true, removed: cleared.length, cleared, left: tasks.length })
     })
 
     route('GET', '/dsh-store/api/diagnose', async (req, res) => {
