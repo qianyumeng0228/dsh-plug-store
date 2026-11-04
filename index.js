@@ -1,5 +1,5 @@
 /**
- * dsh-apps — DSH 插件商店（宿主版）
+ * dsh-app-store — DSH 插件商店（宿主版）
  * 宿主侧插件：在 DSH 的 webServer 上挂载 /dsh-store/* 路由，
  * 用 child_process 调 `dsh plugin` 执行真实安装/卸载/更新/备份/诊断。
  *
@@ -11,7 +11,7 @@ import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { gzip } from 'node:zlib'
 
-export const name = 'dsh-apps'
+export const name = 'dsh-app-store'
 
 export const inject = ['webServer']
 
@@ -653,7 +653,7 @@ function refreshDataCache() {
       return true
     } catch (e) {
       try {
-        console.warn('[dsh-apps] 数据缓存刷新失败，继续用本机快照：', (e && e.message) || e)
+        console.warn('[dsh-app-store] 数据缓存刷新失败，继续用本机快照：', (e && e.message) || e)
       } catch { /* 宿主未接日志也别炸 */ }
       return false
     } finally {
@@ -704,7 +704,7 @@ async function serveSnapshot(req, res, file, contentType) {
     zipped = await new Promise((resolve, reject) => {
       gzip(readFileSync(file), { level: 6 }, (err, out) => (err ? reject(err) : resolve(out)))
     }).catch((e) => {
-      console.warn('[dsh-apps] gzip failed, serving raw', e)
+      console.warn('[dsh-app-store] gzip failed, serving raw', e)
       return null
     })
     if (zipped) {
@@ -789,7 +789,7 @@ export function apply(ctx, config = {}) {
     route('GET', '/dsh-store/api/capabilities', (req, res) => {
       const local = localDataFiles()
       sendJson(res, 200, {
-        name: 'dsh-apps',
+        name: 'dsh-app-store',
         version: '0.1.21',
         profile,
         capabilities: ['installed', 'install', 'uninstall', 'update', 'tasks', 'diagnose', 'backup', 'proxy-data'],
