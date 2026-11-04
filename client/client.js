@@ -45,19 +45,28 @@ var __dshStoreClient = (() => {
   var name = "dsh-plug-store";
   var inject = ["slots", "locale"];
   var NS = "dsh-plug-store";
+  var MIN_FRAME_H = 420;
+  function contentHeight(doc) {
+    if (!doc || !doc.body) return 0;
+    let h = doc.body.getBoundingClientRect().bottom;
+    const footer = doc.querySelector("footer");
+    if (footer) h = Math.max(h, footer.getBoundingClientRect().bottom);
+    return Math.ceil(h);
+  }
+  function fitFrame(f) {
+    try {
+      const h = Math.max(MIN_FRAME_H, contentHeight(f.contentDocument));
+      const cur = parseFloat(f.style.height || "");
+      if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) f.style.height = h + "px";
+    } catch (e) {
+    }
+  }
   function StoreFrame() {
     const frameRef = import_react.default.useRef(null);
     import_react.default.useEffect(() => {
       const sync = () => {
         const f = frameRef.current;
-        if (!f) return;
-        try {
-          const doc = f.contentDocument;
-          const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
-          const cur = parseFloat(f.style.height || "");
-          if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) f.style.height = h + "px";
-        } catch (e) {
-        }
+        if (f) fitFrame(f);
       };
       sync();
       const timer = setInterval(sync, 500);
@@ -65,13 +74,7 @@ var __dshStoreClient = (() => {
     }, []);
     const onLoad = () => {
       const f = frameRef.current;
-      if (!f) return;
-      try {
-        const doc = f.contentDocument;
-        const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
-        if (h > 0) f.style.height = h + "px";
-      } catch (e) {
-      }
+      if (f) fitFrame(f);
     };
     return import_react.default.createElement(
       "div",

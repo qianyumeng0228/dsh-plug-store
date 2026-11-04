@@ -21,6 +21,32 @@ export const inject = ['slots', 'locale']
 
 const NS = 'dsh-plug-store'
 
+const MIN_FRAME_H = 420
+
+/**
+ * 内容真实结束位置。不能量 scrollHeight：iframe 自己不滚，scrollHeight 永远不小于
+ * iframe 当前的视口高度，页面变矮时它仍是旧的 iframe 高度 —— 撑高逻辑看不出「变矮」，
+ * 高度就再也缩不回去，切到提交插件/高级这类短页时下方那一大片空白正是这么留下的。
+ * body 常规流 + height:auto，绝对定位的浮层不计入它的高度，所以量 body 底边是安全的。
+ */
+function contentHeight(doc) {
+  if (!doc || !doc.body) return 0
+  let h = doc.body.getBoundingClientRect().bottom
+  const footer = doc.querySelector('footer')
+  if (footer) h = Math.max(h, footer.getBoundingClientRect().bottom)
+  return Math.ceil(h)
+}
+
+function fitFrame(f) {
+  try {
+    const h = Math.max(MIN_FRAME_H, contentHeight(f.contentDocument))
+    const cur = parseFloat(f.style.height || '')
+    if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) f.style.height = h + 'px'
+  } catch (e) {
+    /* cross-origin or not loaded yet */
+  }
+}
+
 function StoreFrame() {
   // iframe 撑到内容高度，滚动交给宿主设置页的内容列 —— 整页只有一条滚动条，
   // 和 dshmarket 的内联渲染一致。此前改成「iframe 固定高度自己滚」是为了修弹层，
@@ -31,20 +57,7 @@ function StoreFrame() {
   React.useEffect(() => {
     const sync = () => {
       const f = frameRef.current
-      if (!f) return
-      try {
-        const doc = f.contentDocument
-        const h = Math.max(
-          doc.documentElement.scrollHeight,
-          doc.body ? doc.body.scrollHeight : 0
-        )
-        const cur = parseFloat(f.style.height || '')
-        if (h > 0 && (isNaN(cur) || Math.abs(h - cur) > 4)) {
-          f.style.height = h + 'px'
-        }
-      } catch (e) {
-        /* cross-origin or not loaded yet */
-      }
+      if (f) fitFrame(f)
     }
     sync()
     const timer = setInterval(sync, 500)
@@ -52,15 +65,7 @@ function StoreFrame() {
   }, [])
   const onLoad = () => {
     const f = frameRef.current
-    if (!f) return
-    try {
-      const doc = f.contentDocument
-      const h = Math.max(
-        doc.documentElement.scrollHeight,
-        doc.body ? doc.body.scrollHeight : 0
-      )
-      if (h > 0) f.style.height = h + 'px'
-    } catch (e) {}
+    if (f) fitFrame(f)
   }
   return React.createElement(
     'div',
