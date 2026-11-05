@@ -250,7 +250,6 @@ const ROW_ID_RE = /^- id: (?:([A-Za-z0-9_.\-]+)|'([A-Za-z0-9_.\-]+)'|"([A-Za-z0-
 const ROW_NAME_RE = /^ {2}name:[ \t]*(?:'([^']+)'|"([^"]+)"|(\S+?))[ \t]*(?:#.*)?$/
 const ROW_FLAG_RE = /^ {2}disabled:[ \t]*(true|false)[ \t]*(?:#.*)?$/
 const INS_ID_RE = /^ +- id: (?:([A-Za-z0-9_.\-]+)|'([^']+)'|"([^"]+)")[ \t]*(?:#.*)?$/
-const INS_NAME_RE = /^ +name:[ \t]*(?:'([^']+)'|"([^"]+)"|(\S+?))[ \t]*(?:#.*)?$/
 
 function isProtectedRow(id, name) {
   const a = String(id || '')
@@ -321,8 +320,11 @@ function patchTopRows(text) {
 
 /**
  * 某个已装包对应哪些 loader 条目 id。
- * 依据是包自己的 `dsh.bundle.patch` 文件里 insert 列表的 `- id:`，
- * 外加用户补丁层里直接写了这个包名的条目。名字对不上的是别人家的条目，不收。
+ * 主依据是包自己的 `dsh.bundle.patch` 里 insert 列表的 `- id:` ——
+ * **这里不收 name 的限制**：provider 型插件（如 @tt-a1i/archify-dsh）插的条目
+ * `name` 指向宿主的 skill-filesystem 模块，条目本身却完全属于它自己，
+ * 按名字过滤会让这类插件永远没有开关（官方 dshmarket 的 carrier 规则同理）。
+ * 另外把用户补丁层里直接写了这个包名的条目也算进来——那是唯一的线索。
  */
 function bundleRowIds(profile, pkg) {
   const dir = join(profileDir(profile), 'node_modules', pkg)
@@ -347,14 +349,7 @@ function bundleRowIds(profile, pkg) {
     for (let i = 0; i < lines.length; i++) {
       const m = INS_ID_RE.exec(lines[i])
       if (!m) continue
-      const id = m[1] || m[2] || m[3]
-      let name = null
-      for (let j = i + 1; j < lines.length && /^(?:[ \t]+[- ]|\s*$|#)/.test(lines[j]); j++) {
-        if (/^- /.test(lines[j])) break
-        const nm = INS_NAME_RE.exec(lines[j])
-        if (nm) { name = nm[1] || nm[2] || nm[3]; break }
-      }
-      if (name === null || nameIsPkg(name, pkg)) push(id)
+      push(m[1] || m[2] || m[3])
     }
   }
   for (const r of patchTopRows(readTextSafe(userPatchPath(profile)))) {
