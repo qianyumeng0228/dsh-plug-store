@@ -6,9 +6,9 @@
  * 零运行时依赖；仅依赖宿主提供的 webServer 服务。
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { gzip } from 'node:zlib'
 
 export const name = 'dsh-plug-store'
@@ -220,6 +220,223 @@ function readInstalled(profile) {
   } catch {
     return []
   }
+}
+
+/** 本插件自己的可写数据目录（任务记录、数据缓存、补丁备份都在这里，不进 profile 目录）。 */
+function storeDataBase() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, 'store-data')
+}
+
+/* ---------- 启停（热开关，走 profile 的用户补丁层）----------
+ * 宿主的 compose 顺序是 bundle 层 → 用户补丁层（profiles/<p>/cordis.patch.yml）。
+ * 补丁里一行 `- id: X` + `disabled: true` 就停掉那个 loader 条目，`false` 强制启用；
+ * profile 的配置文件监视器约 1 秒内重新 compose，不用重启，下次启动也照这份文件生效。
+ * 机制与官方 dshmarket 相同（它移植自 dsh-plugin-hub 的控制台）。
+ *
+ * 这里的解析故意"不成树、只按行"：补丁文件可能含我们方言之外的结构，
+ * 但顶层 `- id:` 条目 + 两空格缩进的 `disabled:` 足够判断开关状态。
+ */
+
+/** 停掉这些会连承载补丁层的链条一起断掉（HMR / 凭据 / 存储 / 宿主 UI 本体），一律拒绝。 */
+const PROTECTED_ROW_RES = [
+  /^cordis:/i,
+  /^@deepseek-ai\/cordis-plugin-/i,
+  /^dsh-plug-store$/i, // 停用本插件 = 把管理这些开关的界面一起关掉，没人能再打开它
+  /^@deepseek-ai\/dsh-(host-|client-(hmr|runtime|connection|modules|locale)|credentials|session|storage|settings|web-app|api-remotes|tools)/i,
+]
+
+const ROW_ID_RE = /^- id: (?:([A-Za-z0-9_.\-]+)|'([A-Za-z0-9_.\-]+)'|"([A-Za-z0-9_.\-]+)")[ \t]*(?:#.*)?$/
+const ROW_NAME_RE = /^ {2}name:[ \t]*(?:'([^']+)'|"([^"]+)"|(\S+?))[ \t]*(?:#.*)?$/
+const ROW_FLAG_RE = /^ {2}disabled:[ \t]*(true|false)[ \t]*(?:#.*)?$/
+const INS_ID_RE = /^ +- id: (?:([A-Za-z0-9_.\-]+)|'([^']+)'|"([^"]+)")[ \t]*(?:#.*)?$/
+const INS_NAME_RE = /^ +name:[ \t]*(?:'([^']+)'|"([^"]+)"|(\S+?))[ \t]*(?:#.*)?$/
+
+function isProtectedRow(id, name) {
+  const a = String(id || '')
+  const b = String(name || '')
+  return PROTECTED_ROW_RES.some((re) => re.test(a) || re.test(b))
+}
+
+/** 条目名是否属于这个包：允许裸包名与包内子路径（`pkg/lib/x.js`），不允许 `pkg-extra`。 */
+function nameIsPkg(name, pkg) {
+  const n = String(name || '')
+  return n === pkg || n.startsWith(pkg + '/')
+}
+
+function userPatchPath(profile) {
+  return join(profileDir(profile), 'cordis.patch.yml')
+}
+
+function readTextSafe(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+function rowIdOf(line) {
+  const m = ROW_ID_RE.exec(line)
+  return m ? m[1] || m[2] || m[3] : null
+}
+
+function nextContentLine(lines, from) {
+  let i = from
+  while (i < lines.length) {
+    const s = (lines[i] || '').trim()
+    if (s !== '' && !s.startsWith('#')) break
+    i += 1
+  }
+  return i
+}
+
+/**
+ * 用户补丁层的顶层条目。`disabled` 取条目内第一个旗标键；
+ * 只看 `- id:` 的下一行会漏掉「name/config 写在 disabled 之前」的条目，
+ * 于是被关掉的插件永远显示成启用（官方 dshmarket 也踩过这个，#1099）。
+ */
+function patchTopRows(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  const rows = []
+  for (let i = 0; i < lines.length; i++) {
+    const id = rowIdOf(lines[i])
+    if (!id) continue
+    let name = null
+    let disabled = null
+    for (let j = i + 1; j < lines.length && !/^- /.test(lines[j]); j++) {
+      if (name === null) {
+        const m = ROW_NAME_RE.exec(lines[j])
+        if (m) name = m[1] || m[2] || m[3]
+      }
+      if (disabled === null) {
+        const m = ROW_FLAG_RE.exec(lines[j])
+        if (m) disabled = m[1] === 'true'
+      }
+    }
+    rows.push({ id, name, disabled })
+  }
+  return rows
+}
+
+/**
+ * 某个已装包对应哪些 loader 条目 id。
+ * 依据是包自己的 `dsh.bundle.patch` 文件里 insert 列表的 `- id:`，
+ * 外加用户补丁层里直接写了这个包名的条目。名字对不上的是别人家的条目，不收。
+ */
+function bundleRowIds(profile, pkg) {
+  const dir = join(profileDir(profile), 'node_modules', pkg)
+  let bundle = null
+  try {
+    bundle = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))?.dsh?.bundle || null
+  } catch {
+    return []
+  }
+  const files = typeof bundle?.patch === 'string' ? [bundle.patch]
+    : Array.isArray(bundle?.patch) ? bundle.patch : []
+  const ids = []
+  const push = (id) => { if (id && !ids.includes(id)) ids.push(id) }
+  for (const f of files) {
+    let text = ''
+    try {
+      text = readFileSync(resolve(dir, f), 'utf8')
+    } catch {
+      continue
+    }
+    const lines = text.split(/\r?\n/)
+    for (let i = 0; i < lines.length; i++) {
+      const m = INS_ID_RE.exec(lines[i])
+      if (!m) continue
+      const id = m[1] || m[2] || m[3]
+      let name = null
+      for (let j = i + 1; j < lines.length && /^(?:[ \t]+[- ]|\s*$|#)/.test(lines[j]); j++) {
+        if (/^- /.test(lines[j])) break
+        const nm = INS_NAME_RE.exec(lines[j])
+        if (nm) { name = nm[1] || nm[2] || nm[3]; break }
+      }
+      if (name === null || nameIsPkg(name, pkg)) push(id)
+    }
+  }
+  for (const r of patchTopRows(readTextSafe(userPatchPath(profile)))) {
+    if (r.name && nameIsPkg(r.name, pkg)) push(r.id)
+  }
+  return ids
+}
+
+/**
+ * 开关状态：'off' 全部条目都被停用；'mixed' 部分停用（多条目 bundle 常见）；
+ * 'on' 启用；'none' 没有可停的 loader 条目（非 bundle 依赖，或宿主不认的形态）。
+ */
+function toggleState(rows, ids) {
+  if (!ids.length) return 'none'
+  const flags = ids.map((id) => {
+    let flag = null
+    for (const r of rows) if (r.id === id && r.disabled !== null) flag = r.disabled
+    return flag
+  })
+  const off = flags.filter((f) => f === true).length
+  if (off === ids.length) return 'off'
+  if (off > 0) return 'mixed'
+  return 'on'
+}
+
+let patchWrite = Promise.resolve()
+
+function queuePatchWrite(fn) {
+  const run = patchWrite.then(fn, fn)
+  patchWrite = run.then(() => undefined, () => undefined)
+  return run
+}
+
+function upsertRowFlag(text, id, disabled, eol) {
+  const want = `  disabled: ${disabled ? 'true' : 'false'}`
+  const lines = text.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    if (rowIdOf(lines[i]) !== id) continue
+    const j = nextContentLine(lines, i + 1)
+    if (j >= lines.length) continue
+    if (!ROW_FLAG_RE.test(lines[j])) continue
+    lines[j] = want
+    return lines.join(eol)
+  }
+  const base = text.replace(/[\r\n]+$/, '')
+  const block = `- id: ${id}${eol}${want}${eol}`
+  return base === '' ? block : base + eol + block
+}
+
+/**
+ * 写补丁层：只在该文件确实是"顶层条目列表"时动手，坏文件一律拒绝而不是改得更坏；
+ * 写之前把原文备份到本插件自己的目录，不往 profile 里堆 .bak。
+ */
+function setRowsDisabled(profile, ids, disabled) {
+  return queuePatchWrite(() => {
+    const path = userPatchPath(profile)
+    const text = readTextSafe(path)
+    const core = text.replace(/^[ \t]*#.*$/gm, '').trim()
+    if (core !== '' && core !== '[]' && !core.startsWith('-')) {
+      return { ok: false, reason: '补丁层不是预期的条目列表，已放弃写入（请人工检查 cordis.patch.yml）' }
+    }
+    const eol = text.includes('\r\n') ? '\r\n' : '\n'
+    let next = core === '[]' ? text.replace('[]', '') : text
+    for (const id of ids) next = upsertRowFlag(next, id, disabled, eol)
+    if (next === text) return { ok: true, changed: false }
+    let backup = ''
+    try {
+      const dir = join(storeDataBase(), 'patch-backups')
+      mkdirSync(dir, { recursive: true })
+      backup = join(dir, `cordis.patch.${Date.now()}.yml`)
+      writeFileSync(backup, text)
+      const keep = 8
+      const old = readdirSync(dir).filter((f) => f.startsWith('cordis.patch.')).sort()
+      while (old.length > keep) {
+        try { unlinkSync(join(dir, old.shift())) } catch { break }
+      }
+    } catch { /* 备份失败不挡住开关本身 */ }
+    const tmp = path + '.dsh-plug-store.tmp'
+    writeFileSync(tmp, next)
+    renameSync(tmp, path)
+    return { ok: true, changed: true, backup }
+  })
 }
 
 /**
@@ -802,7 +1019,7 @@ export function apply(ctx, config = {}) {
         name: 'dsh-plug-store',
         version: PKG_VERSION,
         profile,
-        capabilities: ['installed', 'install', 'uninstall', 'update', 'tasks', 'diagnose', 'backup', 'proxy-data'],
+        capabilities: ['installed', 'install', 'uninstall', 'update', 'tasks', 'toggle', 'diagnose', 'backup', 'proxy-data'],
         data: {
           bundled: local.plugins !== null,
           bundledBytes: local.pluginsBytes,
@@ -813,6 +1030,13 @@ export function apply(ctx, config = {}) {
     route('GET', '/dsh-store/api/installed', (req, res) => {
       try {
         const entries = readInstalled(profile)
+        // 开关状态一次读补丁层，别每个包都读一遍（32 个包 = 32 次文件读）
+        const rows = patchTopRows(readTextSafe(userPatchPath(profile)))
+        for (const e of entries) {
+          e.rowIds = bundleRowIds(profile, e.name)
+          e.rowState = toggleState(rows, e.rowIds)
+          e.protected = e.rowIds.some((id) => isProtectedRow(id, e.name))
+        }
         // installed 给名字数组（前端按名字判断已装），installedDetails 保留来源信息
         sendJson(res, 200, {
           profile,
@@ -822,6 +1046,57 @@ export function apply(ctx, config = {}) {
       } catch (e) {
         sendJson(res, 500, { error: String(e?.message || e) })
       }
+    })
+
+    route('POST', '/dsh-store/api/toggle', async (req, res) => {
+      let body
+      try {
+        body = await readBody(req)
+      } catch {
+        sendJson(res, 400, { error: 'invalid JSON body' })
+        return
+      }
+      const name = String((body && body.name) || '').trim()
+      const disabled = !!(body && body.disabled)
+      // 名字后面会拿去拼 node_modules 路径，虽然真用之前还会跟已装清单比一次，
+      // 这里也不放过 `..` / 以 - 开头这类形态（和 install 的标识校验同一口径）
+      if (!/^(?!-)(?!.*\.\.)(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]{1,100}$/.test(name)) {
+        sendJson(res, 400, { error: 'invalid plugin name' })
+        return
+      }
+      const entry = readInstalled(profile).find((e) => e.name === name)
+      if (!entry) {
+        sendJson(res, 404, { error: 'not installed in this profile', profile })
+        return
+      }
+      const ids = bundleRowIds(profile, name)
+      if (!ids.length) {
+        sendJson(res, 400, {
+          error: 'no hot-toggleable loader entry',
+          hint: '这个包没有 bundle 补丁层（多半是别人的依赖，不是插件本体），只能靠卸载停用',
+        })
+        return
+      }
+      if (ids.some((id) => isProtectedRow(id, name))) {
+        sendJson(res, 400, { error: '宿主基础设施条目不允许停用', rowIds: ids })
+        return
+      }
+      const r = await setRowsDisabled(profile, ids, disabled)
+      if (!r.ok) {
+        sendJson(res, 500, { error: r.reason })
+        return
+      }
+      const rows = patchTopRows(readTextSafe(userPatchPath(profile)))
+      sendJson(res, 200, {
+        ok: true,
+        profile,
+        name,
+        rowIds: ids,
+        disabled,
+        changed: !!r.changed,
+        rowState: toggleState(rows, ids),
+        note: '补丁层已写入，profile 的监视器约 1 秒内重新 compose，不用重启',
+      })
     })
 
     route('POST', '/dsh-store/api/install', async (req, res) => {
@@ -947,6 +1222,20 @@ export function apply(ctx, config = {}) {
       }
       const versionRun = existsSync(cli) ? await runDsh(['--version'], { timeout: 15000 }) : null
       checks.cliVersion = versionRun && versionRun.code === 0 ? versionRun.stdout.trim().slice(0, 120) : null
+      // 启停用的补丁层健康度：坏文件会让开关写不进去，这里先说清楚
+      const patchPath = userPatchPath(profile)
+      const patchText = readTextSafe(patchPath)
+      const patchRows = patchTopRows(patchText)
+      const patchCore = patchText.replace(/^[ \t]*#.*$/gm, '').trim()
+      checks.patch = {
+        path: patchPath,
+        exists: existsSync(patchPath),
+        bytes: patchText.length,
+        entries: patchRows.length,
+        disabled: patchRows.filter((r) => r.disabled === true).length,
+        forced: patchRows.filter((r) => r.disabled === false).length,
+        writableShape: patchCore === '' || patchCore === '[]' || patchCore.startsWith('-'),
+      }
       // 数据源探测：HEAD 主页（KB 级，避免 9MB 索引全量下载）
       const home = await fetchJson('https://qianyumeng0228.github.io/dsh-store/', 10000)
       checks.remote = {
