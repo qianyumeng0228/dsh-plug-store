@@ -457,6 +457,8 @@ function runDshStream(args, onLine, opts = {}) {
     }
     let outBuf = ''
     let errBuf = ''
+    let killReason = ''
+    let lastOutput = Date.now()
     try {
       child = spawn(inv.file, [...inv.args, ...args], {
         windowsHide: true,
@@ -467,28 +469,43 @@ function runDshStream(args, onLine, opts = {}) {
       resolve({ code: -1, stdout: '', stderr: String(e) })
       return
     }
+    if (opts.onSpawn) { try { opts.onSpawn(child) } catch { /* noop */ } }
     const timer = setTimeout(() => {
+      killReason = 'timeout'
       try { child.kill() } catch { /* noop */ }
     }, opts.timeout || 120000)
+    // 静默熔断：pnpm 正常跑会持续吐 ndjson;五分钟一个字都没有基本是挂死
+    // （网络黑洞、等一个永远不会来的输入），不能让它占着串行队列。
+    const stallMs = opts.stallMs === undefined ? 300000 : opts.stallMs
+    const stallTimer = stallMs > 0 ? setInterval(() => {
+      if (Date.now() - lastOutput > stallMs) {
+        killReason = 'stall'
+        try { child.kill() } catch { /* noop */ }
+      }
+    }, 15000) : null
     child.stdout?.on('data', (d) => {
       const s = String(d)
+      lastOutput = Date.now()
       stdout += s
       outBuf = emitLines(outBuf + s, 'stdout')
     })
     child.stderr?.on('data', (d) => {
       const s = String(d)
+      lastOutput = Date.now()
       stderr += s
       errBuf = emitLines(errBuf + s, 'stderr')
     })
     child.on('close', (code) => {
       clearTimeout(timer)
+      if (stallTimer) clearInterval(stallTimer)
       if (outBuf.trim()) { try { onLine(outBuf, 'stdout') } catch { /* noop */ } }
       if (errBuf.trim()) { try { onLine(errBuf, 'stderr') } catch { /* noop */ } }
-      resolve({ code, stdout, stderr })
+      resolve({ code, stdout, stderr, killReason })
     })
     child.on('error', (e) => {
       clearTimeout(timer)
-      resolve({ code: -1, stdout, stderr: String(e) })
+      if (stallTimer) clearInterval(stallTimer)
+      resolve({ code: -1, stdout, stderr: String(e), killReason })
     })
   })
 }
@@ -502,6 +519,11 @@ const TASK_CAP = 60
 const tasks = []
 let taskSeq = 0
 let queueTail = Promise.resolve()
+let currentChild = null
+/* 连续"目录被占用"失败计数：pnpm 每次操作都重建整棵 node_modules，一个被占用的
+   目录会让后面所有更新在同一步失败（实测 20 条队列每条空转 2 分钟）。连败 2 次
+   就把还在排队的任务直接熔断掉，别让用户等四十分钟看二十遍同一个错误。 */
+let epermStreak = 0
 
 const PHASE_ZH = {
   resolving: '解析依赖',
@@ -524,6 +546,8 @@ const ERR_HINTS = {
   ERR_PNPM_GIT_REPO_NOT_FOUND: 'GitHub 仓库不存在或已改名（git 源可能要重新收录）',
   EACCES: '文件被占用或没有写权限（Windows 上常见于 DSH 正持有该文件）',
   EPERM: '文件被占用或没有写权限',
+  ERR_PNPM_EPERM: '插件目录被运行中的进程占用（Windows 常见：宿主或插件子进程持有目录句柄，目录会进入"删除_pending"状态连 ls 都拒绝）。重启 DSH 释放句柄后重试',
+  ERR_PNPM_EACCES: '插件目录被占用或权限不足，重启 DSH 后重试；仍失败检查杀毒/索引服务是否扫描该目录',
   ENOTFOUND: '域名解析失败，检查网络或代理',
   EAI_AGAIN: '网络抖动（DNS 临时失败），可直接重试',
   ETIMEDOUT: '网络超时，可直接重试',
@@ -685,27 +709,67 @@ function depVersionOf(profileName, plan) {
 }
 
 function runTask(task, args) {
+  // 被熔断/取消的任务不再spawn：队列链还会走到它，但状态已经不是 queued
+  if (task.state !== 'queued') return Promise.resolve({ code: -1, skipped: true })
   task.state = 'running'
   task.startedAt = new Date().toISOString()
-  return runDshStream(args, (line) => feedTaskLine(task, line), { timeout: 900000 })
+  return runDshStream(args, (line) => feedTaskLine(task, line), {
+    timeout: 600000,
+    onSpawn: (c) => { currentChild = c },
+  })
     .then((result) => {
+      currentChild = null
       task.endedAt = new Date().toISOString()
       task.percent = 100
       task.code = result.code
       if (result.code === 0) {
         task.state = 'done'
         task.phaseText = '完成'
+        epermStreak = 0
       } else {
         task.state = 'failed'
         task.phaseText = '失败'
-        if (!task.error) {
-          const tail = String(result.stderr || result.stdout || '').trim().split('\n').filter(Boolean).slice(-3)
-          task.error = tail.join(' / ').slice(0, 600) || `CLI 退出码 ${result.code}`
+        if (task.cancelled) {
+          task.error = '已手动取消'
+          task.hint = ''
+        } else if (!task.error) {
+          if (result.killReason === 'stall') task.error = '连续 5 分钟无任何输出，判定卡死已终止（检查网络/代理后重试）'
+          else if (result.killReason === 'timeout') task.error = '单任务超过 10 分钟被终止（检查网络/代理后重试）'
+          else {
+            const tail = String(result.stderr || result.stdout || '').trim().split('\n').filter(Boolean).slice(-3)
+            task.error = tail.join(' / ').slice(0, 600) || `CLI 退出码 ${result.code}`
+          }
+        }
+        if (/allow-version/.test(task.error) && /accept-risk/.test(task.error)) {
+          task.hint = 'DSH 风险策略拦下了这个版本（如 engines 不匹配）。确认来源可信后，在终端执行错误里给出的 allow-version … --accept-risk 命令，再回商店重试'
+        }
+        const locked = /EPERM|EACCES/.test(task.errorCode) || /EPERM|EACCES/.test(task.error)
+        if (locked) {
+          epermStreak++
+          if (epermStreak === 2) tripQueueBreaker()
+        } else {
+          epermStreak = 0
         }
       }
       persistTasks()
       return result
     })
+}
+
+/** 连败两次"目录被占用"后，把还在排队的任务标失败并写明原因（不真的跑 pnpm）。 */
+function tripQueueBreaker() {
+  let n = 0
+  for (const t of tasks) {
+    if (t.state !== 'queued') continue
+    t.state = 'failed'
+    t.phaseText = '未执行'
+    t.endedAt = new Date().toISOString()
+    t.error = '未执行：队列熔断 —— 前两个任务都因"目录被占用(EPERM)"失败，继续排队只会重复同一个错误'
+    t.hint = '重启 DSH 释放目录占用后点重试；任一任务成功或清除记录都会解除熔断'
+    n++
+  }
+  if (n) persistTasks()
+  return n
 }
 
 /** 排队执行：同一时刻只有一个 pnpm 在跑，后来的任务在面板里显示"排队中"。 */
@@ -1191,18 +1255,35 @@ export function apply(ctx, config = {}) {
       }
     })
 
-    // 只清已结束的记录（done/failed）：正在跑或还在排队的任务不能被抹掉，
-    // 否则前端会以为它凭空消失，实际仍在改 profile。
+    // 清已结束的记录（done/failed），并取消排队中/正在跑的任务：
+    // 队列被占用目录毒化时用户需要一条逃生门，不能看着二十条任务空转。
+    // 取消是用户主动点的，运行中的 pnpm 被 kill 后由 runTask 收尾标"已手动取消"。
     route('POST', '/dsh-store/api/tasks/clear', (req, res) => {
       const cleared = []
+      let cancelled = 0
       for (let i = tasks.length - 1; i >= 0; i--) {
-        if (tasks[i].state === 'done' || tasks[i].state === 'failed') {
-          cleared.push(tasks[i].id)
+        const t = tasks[i]
+        if (t.state === 'done' || t.state === 'failed') {
+          cleared.push(t.id)
           tasks.splice(i, 1)
+          continue
+        }
+        if (t.state === 'queued') {
+          t.state = 'failed'
+          t.phaseText = '已取消'
+          t.error = '已手动取消（清除队列）'
+          t.hint = ''
+          t.endedAt = new Date().toISOString()
+          cancelled++
+        } else if (t.state === 'running') {
+          t.cancelled = true
+          cancelled++
+          try { if (currentChild) currentChild.kill() } catch { /* noop */ }
         }
       }
+      epermStreak = 0
       persistTasks()
-      sendJson(res, 200, { ok: true, removed: cleared.length, cleared, left: tasks.length })
+      sendJson(res, 200, { ok: true, removed: cleared.length, cleared, cancelled, left: tasks.length })
     })
 
     route('GET', '/dsh-store/api/diagnose', async (req, res) => {
