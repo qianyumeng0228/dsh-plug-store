@@ -898,7 +898,7 @@ function fileEtag(st) {
  * 未压缩时这个文件近 20MB，浏览器每次打开商店都要重下一遍再 parse；gzip 后约
  * 3.6MB，而命中 ETag 时只回 304。压缩走 zlib 的异步接口，不占宿主事件循环。
  */
-async function serveSnapshot(req, res, file, contentType) {
+async function serveSnapshot(req, res, file, contentType, extraHeaders = {}) {
   let st
   try {
     st = statSync(file)
@@ -908,12 +908,12 @@ async function serveSnapshot(req, res, file, contentType) {
   }
   const etag = fileEtag(st)
   if (String(req.headers['if-none-match'] || '').includes(etag)) {
-    res.writeHead(304, { etag, 'cache-control': 'no-cache' })
+    res.writeHead(304, { etag, 'cache-control': 'no-cache', ...extraHeaders })
     res.end()
     return
   }
   const acceptsGzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))
-  const base = { etag, 'cache-control': 'no-cache', 'content-type': contentType, vary: 'Accept-Encoding' }
+  const base = { etag, 'cache-control': 'no-cache', 'content-type': contentType, vary: 'Accept-Encoding', ...extraHeaders }
   if (!acceptsGzip) {
     const body = readFileSync(file)
     res.writeHead(200, { ...base, 'content-length': String(body.byteLength) })
@@ -1304,12 +1304,13 @@ export function apply(ctx, config = {}) {
         await serveSnapshot(req, res, cache, 'application/json; charset=utf-8')
         return
       }
-      // 缓存过期也先立刻回数据（首屏不该等 20MB 下载），同时后台拉新版，
-      // 下一次打开商店就是线上最新的。缓存与内置快照都没有才同步等远端。
+      // 缓存过期也先立刻回数据（首屏不该等 20MB 下载），同时后台拉新版。
+      // x-data-stale 让页面知道拿到的是旧快照：后台拉完后自动重取换新，
+      // 否则隔了几天再打开商店会一直停在旧数字上，看着像"商店挂了"。
       const stale = age !== Infinity ? cache : local.plugins
       if (stale) {
         refreshDataCache()
-        await serveSnapshot(req, res, stale, 'application/json; charset=utf-8')
+        await serveSnapshot(req, res, stale, 'application/json; charset=utf-8', { 'x-data-stale': '1' })
         return
       }
       const controller = new AbortController()
