@@ -28,8 +28,8 @@ dsh plugin --profile <profile> add dsh-plug-store
 dsh plugin --profile <profile> add github:qianyumeng0228/dsh-plug-store
 ```
 
-> **npm currently publishes 0.1.21.** The GitHub source is always current and carries
-> the last five fixes; prefer the `github:` form above until the npm release catches up.
+> **npm is published up to 0.1.30, in sync with the latest GitHub release.** Both install
+> forms are equivalent; use the `github:` form above only for unreleased intermediate commits.
 
 Restart the host afterwards, or let profile HMR pick it up: the plugin declares a bundle, so
 `dsh.bundle.patch` usually reloads it without a restart.
